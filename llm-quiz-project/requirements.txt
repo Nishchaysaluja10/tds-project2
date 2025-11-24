@@ -1,9 +1,9 @@
-flask==3.0.0
-openai>=1.30.0
-requests==2.31.0
-beautifulsoup4==4.12.2
+flask
+openai
+requests
+beautifulsoup4
 pandas
-python-dotenv==1.0.0
-gunicorn==21.2.0
+python-dotenv
+gunicorn
 openpyxl
 lxml
