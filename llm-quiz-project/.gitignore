@@ -1,6 +1,10 @@
-venv/
-__pycache__/
-*.pyc
+# .gitignore file content
 .env
-demo_page.html
+*.pyc
+__pycache__/
+venv/
+.venv/
 *.log
+demo_page.html
+.DS_Store
+demo_page.html
