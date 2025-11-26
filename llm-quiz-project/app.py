@@ -27,45 +27,72 @@ SUBMIT_ENDPOINT = "https://example.com/submit"  # TODO: UPDATE THIS
 
 
 def scrape_quiz_page(url):
-    """Fetch the quiz page and extract the question"""
+    """Fetch the quiz page and extract the question (handles JavaScript)"""
     try:
         print(f"Scraping: {url}")
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
         
-        soup = BeautifulSoup(response.content, 'html.parser')
+        # Use Playwright for JavaScript rendering
+        from playwright.sync_api import sync_playwright
         
-        # Look for the quiz question in div with id="result"
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            
+            # Navigate and wait for content
+            page.goto(url, wait_until='networkidle', timeout=30000)
+            
+            # Wait for result div to appear
+            try:
+                page.wait_for_selector('#result', timeout=5000)
+            except:
+                print("Warning: #result div not found immediately")
+            
+            # Wait a bit more for JavaScript to execute
+            page.wait_for_timeout(2000)
+            
+            # Get the rendered HTML
+            content = page.content()
+            browser.close()
+        
+        # Now parse with BeautifulSoup
+        soup = BeautifulSoup(content, 'html.parser')
+        
+        # Extract question from #result div
         result_div = soup.find('div', id='result')
         
-        if result_div:
-            question_text = result_div.get_text(strip=True)
-            print(f"✅ Question found: {question_text[:100]}...")
-            
-            # Also check for downloadable files
-            files = {}
-            download_links = soup.find_all('a', href=True)
-            for link in download_links:
-                if 'download' in link.text.lower() or link.get('download'):
-                    file_url = link['href']
-                    # Make absolute URL if needed
-                    if not file_url.startswith('http'):
-                        file_url = urljoin(url, file_url)
-                    files[link.text] = file_url
-                    print(f"📎 File found: {link.text} -> {file_url}")
-            
-            return {
-                'question': question_text,
-                'files': files
-            }
-        else:
-            print("❌ No question div found")
+        if not result_div:
+            print("❌ No #result div found")
             return None
+        
+        question_text = result_div.get_text(strip=True)
+        print(f"✅ Question found: {question_text[:150]}...")
+        
+        # Look for downloadable files
+        files = {}
+        for link in soup.find_all('a', href=True):
+            href = link['href']
+            text = link.get_text(strip=True)
             
+            if (link.get('download') or 
+                'download' in text.lower() or 
+                any(href.endswith(ext) for ext in ['.csv', '.xlsx', '.xls', '.pdf', '.txt', '.json'])):
+                
+                if not href.startswith('http'):
+                    from urllib.parse import urljoin
+                    href = urljoin(url, href)
+                files[text or 'file'] = href
+                print(f"📎 File found: {text} -> {href}")
+        
+        return {
+            'question': question_text,
+            'files': files
+        }
+        
     except Exception as e:
         print(f"❌ Scraping error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None
-
 
 def download_file(url):
     """Download file and return content as string"""

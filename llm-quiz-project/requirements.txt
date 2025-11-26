@@ -7,3 +7,5 @@ python-dotenv
 gunicorn
 openpyxl
 lxml
+playwright==1.40.0
+chromium # for playwright
