@@ -80,8 +80,34 @@ def scrape_quiz_page(url):
         
         if result_div:
             question_text = result_div.get_text(strip=True)
-            print(f"✅ Question found in #result: {question_text[:100]}...")
-        else:
+            if question_text:
+                print(f"✅ Question found in #result: {question_text[:100]}...")
+            else:
+                # Result div is empty - likely JavaScript-rendered
+                # Try to extract base64 content from script tags
+                print("⚠️ #result div is empty, checking for base64 in scripts")
+                import re
+                import base64
+                
+                for script in soup.find_all('script'):
+                    script_text = script.string
+                    if script_text and 'atob' in script_text:
+                        # Extract base64 content from atob() calls
+                        matches = re.findall(r'atob\([`\'"]([A-Za-z0-9+/=\s]+)[`\'"]\)', script_text)
+                        for match in matches:
+                            try:
+                                # Remove whitespace and decode
+                                decoded = base64.b64decode(match.replace('\n', '').replace(' ', '')).decode('utf-8')
+                                if len(decoded) > 20:
+                                    question_text = decoded
+                                    print(f"✅ Decoded base64 question: {question_text[:100]}...")
+                                    break
+                            except Exception as e:
+                                print(f"⚠️ Failed to decode base64: {e}")
+                        if question_text:
+                            break
+        
+        if not question_text:
             # Try alternative selectors
             print("⚠️ No #result div, trying alternatives")
             for selector in ['#quiz', '#question', '.question', 'main', 'article']:
