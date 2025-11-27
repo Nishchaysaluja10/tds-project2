@@ -262,30 +262,36 @@ def submit_answer(quiz_url, answer):
     submit_url = SUBMIT_ENDPOINT or "https://tds-llm-analysis.s-anand.net/submit"
     
     try:
+        # CRITICAL: Use YOUR actual credentials, not template text
         payload = {
-            "email": YOUR_EMAIL,
-            "secret": YOUR_SECRET,
-            "url": quiz_url,
-            "answer": answer
+            "email": YOUR_EMAIL,  # Your actual email
+            "secret": YOUR_SECRET,  # Your actual secret (NOT "your secret")
+            "url": quiz_url,  # The actual quiz URL (NOT "this page's URL")
+            "answer": answer  # Your computed answer
         }
         
         print(f"📤 Submitting to: {submit_url}")
+        print(f"📤 Email: {YOUR_EMAIL}")
+        print(f"📤 Secret: {'*' * len(YOUR_SECRET)}")  # Don't print actual secret
+        print(f"📤 URL: {quiz_url}")
         print(f"📤 Answer: {answer} (type: {type(answer).__name__})")
         
         response = requests.post(submit_url, json=payload, timeout=30)
         
+        # Parse response
         try:
             result = response.json()
         except:
             result = {"error": "Invalid JSON response", "text": response.text[:200]}
         
-        print(f"📨 Response ({response.status_code}): {result}")
+        print(f"📨 Status: {response.status_code}")
+        print(f"📨 Response: {result}")
+        
         return result
         
     except Exception as e:
         print(f"❌ Submission error: {str(e)}")
         return {"error": str(e), "correct": False}
-
 
 @app.route('/')
 def home():
