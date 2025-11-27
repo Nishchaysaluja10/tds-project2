@@ -39,31 +39,31 @@ def scrape_quiz_page(url):
                 try:
                     browser = p.chromium.launch(headless=True)
                 except Exception as e:
-                    if "Executable doesn't exist" in str(e):
-                        print("⚠️ Playwright browsers missing, installing now...")
-                        import subprocess
-                        subprocess.run(["playwright", "install", "chromium"], check=True)
-                        browser = p.chromium.launch(headless=True)
-                    else:
-                        raise e
-
-                page = browser.new_page()
-                
-                # Navigate and wait for content
-                page.goto(url, wait_until='networkidle', timeout=30000)
-                
-                # Wait for result div
-                try:
-                    page.wait_for_selector('#result', timeout=5000)
-                except:
-                    print("⚠️ Timeout waiting for #result, continuing anyway")
-                
-                # Wait a bit for JavaScript
-                page.wait_for_timeout(2000)
-                
-                # Get rendered HTML
-                content = page.content()
-                browser.close()
+                    # Don't try to install during request - browsers should be installed by build.sh
+                    # Just fall back to requests
+                    print(f"⚠️ Playwright browser launch failed: {str(e)}")
+                    print("⚠️ Falling back to requests library")
+                    response = requests.get(url, timeout=10)
+                    response.raise_for_status()
+                    content = response.text
+                else:
+                    page = browser.new_page()
+                    
+                    # Navigate and wait for content
+                    page.goto(url, wait_until='networkidle', timeout=30000)
+                    
+                    # Wait for result div
+                    try:
+                        page.wait_for_selector('#result', timeout=5000)
+                    except:
+                        print("⚠️ Timeout waiting for #result, continuing anyway")
+                    
+                    # Wait a bit for JavaScript
+                    page.wait_for_timeout(2000)
+                    
+                    # Get rendered HTML
+                    content = page.content()
+                    browser.close()
                 
         except ImportError:
             print("⚠️ Playwright not available, using requests")
