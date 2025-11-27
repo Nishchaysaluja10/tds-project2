@@ -1,4 +1,3 @@
-from config import YOUR_EMAIL, YOUR_SECRET, OPENAI_API_KEY, SUBMIT_ENDPOINT
 from flask import Flask, request, jsonify
 import os
 from dotenv import load_dotenv
@@ -8,6 +7,7 @@ from openai import OpenAI
 import pandas as pd
 from io import StringIO, BytesIO
 from urllib.parse import urljoin
+import time
 
 # Load environment variables
 load_dotenv()
@@ -22,8 +22,8 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 # Initialize OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Submission endpoint (you'll get this from project instructions)
-SUBMIT_ENDPOINT = "https://example.com/submit"  # TODO: UPDATE THIS
+# Submission endpoint - will be extracted from quiz page
+SUBMIT_ENDPOINT = None  # Don't hardcode - extract from page
 
 
 def scrape_quiz_page(url):
@@ -31,41 +31,82 @@ def scrape_quiz_page(url):
     try:
         print(f"Scraping: {url}")
         
-        # Use Playwright for JavaScript rendering
-        from playwright.sync_api import sync_playwright
+        # Try with Playwright first (for JavaScript-rendered pages)
+        try:
+            from playwright.sync_api import sync_playwright
+            
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+                
+                # Navigate and wait for content
+                page.goto(url, wait_until='networkidle', timeout=30000)
+                
+                # Wait for result div
+                try:
+                    page.wait_for_selector('#result', timeout=5000)
+                except:
+                    print("⚠️ Timeout waiting for #result, continuing anyway")
+                
+                # Wait a bit for JavaScript
+                page.wait_for_timeout(2000)
+                
+                # Get rendered HTML
+                content = page.content()
+                browser.close()
+                
+        except ImportError:
+            print("⚠️ Playwright not available, using requests")
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            content = response.text
         
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            
-            # Navigate and wait for content
-            page.goto(url, wait_until='networkidle', timeout=30000)
-            
-            # Wait for result div to appear
-            try:
-                page.wait_for_selector('#result', timeout=5000)
-            except:
-                print("Warning: #result div not found immediately")
-            
-            # Wait a bit more for JavaScript to execute
-            page.wait_for_timeout(2000)
-            
-            # Get the rendered HTML
-            content = page.content()
-            browser.close()
-        
-        # Now parse with BeautifulSoup
+        # Parse with BeautifulSoup
         soup = BeautifulSoup(content, 'html.parser')
         
-        # Extract question from #result div
+        # Try to find result div
         result_div = soup.find('div', id='result')
+        question_text = None
         
-        if not result_div:
-            print("❌ No #result div found")
+        if result_div:
+            question_text = result_div.get_text(strip=True)
+            print(f"✅ Question found in #result: {question_text[:100]}...")
+        else:
+            # Try alternative selectors
+            print("⚠️ No #result div, trying alternatives")
+            for selector in ['#quiz', '#question', '.question', 'main', 'article']:
+                elem = soup.select_one(selector)
+                if elem:
+                    text = elem.get_text(strip=True)
+                    if len(text) > 20:
+                        question_text = text
+                        print(f"✅ Question found in {selector}")
+                        break
+        
+        # Last resort - get body text
+        if not question_text or len(question_text) < 10:
+            body = soup.find('body')
+            if body:
+                for script in body(['script', 'style', 'nav', 'footer']):
+                    script.decompose()
+                question_text = body.get_text(strip=True)
+                print(f"⚠️ Using body text as question")
+        
+        if not question_text or len(question_text) < 10:
+            print("❌ No meaningful content found")
             return None
         
-        question_text = result_div.get_text(strip=True)
-        print(f"✅ Question found: {question_text[:150]}...")
+        # Look for submit URL in the page
+        global SUBMIT_ENDPOINT
+        for text in soup.stripped_strings:
+            if 'submit' in text.lower() and ('http://' in text or 'https://' in text):
+                # Try to extract URL
+                import re
+                urls = re.findall(r'https?://[^\s<>"]+', text)
+                if urls:
+                    SUBMIT_ENDPOINT = urls[0]
+                    print(f"📤 Submit endpoint found: {SUBMIT_ENDPOINT}")
+                    break
         
         # Look for downloadable files
         files = {}
@@ -78,7 +119,6 @@ def scrape_quiz_page(url):
                 any(href.endswith(ext) for ext in ['.csv', '.xlsx', '.xls', '.pdf', '.txt', '.json'])):
                 
                 if not href.startswith('http'):
-                    from urllib.parse import urljoin
                     href = urljoin(url, href)
                 files[text or 'file'] = href
                 print(f"📎 File found: {text} -> {href}")
@@ -94,11 +134,12 @@ def scrape_quiz_page(url):
         traceback.print_exc()
         return None
 
+
 def download_file(url):
     """Download file and return content as string"""
     try:
         print(f"Downloading file: {url}")
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=15)
         response.raise_for_status()
         
         # Check if it's a CSV file
@@ -112,6 +153,11 @@ def download_file(url):
             df = pd.read_excel(BytesIO(response.content))
             print(f"✅ Excel loaded: {df.shape[0]} rows, {df.shape[1]} columns")
             return df.to_string()
+        
+        # PDF handling (basic)
+        elif url.endswith('.pdf'):
+            print(f"✅ PDF downloaded: {len(response.content)} bytes")
+            return f"PDF file with {len(response.content)} bytes"
         
         else:
             print(f"✅ Text file loaded: {len(response.text)} characters")
@@ -132,12 +178,17 @@ Question: {question}
 """
         
         if data_context:
-            prompt += f"\n\nData provided:\n{data_context}\n"
+            # Limit context size to avoid token limits
+            if len(data_context) > 8000:
+                prompt += f"\n\nData provided (truncated):\n{data_context[:8000]}...\n"
+            else:
+                prompt += f"\n\nData provided:\n{data_context}\n"
         
         prompt += """
 Important instructions:
 - Provide ONLY the final answer
 - If it's a number, give just the number (no units, no commas, no formatting)
+- If it's a yes/no question, answer with just "yes" or "no" (or true/false)
 - If it's a calculation, show only the result
 - No explanations or reasoning
 - Be precise and exact
@@ -148,7 +199,7 @@ Answer:"""
         
         # Call OpenAI API
         response = client.chat.completions.create(
-            model="gpt-4o",  # Change to "gpt-3.5-turbo" for testing to save money
+            model="gpt-4o",
             messages=[
                 {
                     "role": "system",
@@ -159,7 +210,7 @@ Answer:"""
                     "content": prompt
                 }
             ],
-            temperature=0,  # More deterministic
+            temperature=0,
             max_tokens=500
         )
         
@@ -169,24 +220,47 @@ Answer:"""
         # Clean up the answer
         answer = answer.replace('Answer:', '').strip()
         answer = answer.replace('The answer is', '').strip()
-        answer = answer.replace(',', '')  # Remove commas from numbers
+        answer = answer.replace('The result is', '').strip()
         
-        # Try to convert to number if possible
-        try:
-            if '.' in answer:
-                return float(answer)
-            return int(answer)
-        except ValueError:
-            # Return as string if not a number
-            return answer
+        return parse_answer(answer)
             
     except Exception as e:
         print(f"❌ GPT error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None
+
+
+def parse_answer(answer_text):
+    """Parse answer to appropriate type (boolean, number, string)"""
+    answer = answer_text.strip()
+    
+    # Try boolean
+    if answer.lower() in ['true', 'yes']:
+        return True
+    if answer.lower() in ['false', 'no']:
+        return False
+    
+    # Try number (remove commas first)
+    try:
+        clean = answer.replace(',', '')
+        if '.' in clean:
+            return float(clean)
+        return int(clean)
+    except ValueError:
+        pass
+    
+    # Return as string
+    return answer
 
 
 def submit_answer(quiz_url, answer):
     """Submit the answer back to the evaluation system"""
+    global SUBMIT_ENDPOINT
+    
+    # Use extracted submit endpoint or default
+    submit_url = SUBMIT_ENDPOINT or "https://tds-llm-analysis.s-anand.net/submit"
+    
     try:
         payload = {
             "email": YOUR_EMAIL,
@@ -195,17 +269,22 @@ def submit_answer(quiz_url, answer):
             "answer": answer
         }
         
-        print(f"📤 Submitting answer: {answer}")
+        print(f"📤 Submitting to: {submit_url}")
+        print(f"📤 Answer: {answer} (type: {type(answer).__name__})")
         
-        response = requests.post(SUBMIT_ENDPOINT, json=payload, timeout=30)
-        result = response.json()
+        response = requests.post(submit_url, json=payload, timeout=30)
         
-        print(f"📨 Submission result: {result}")
+        try:
+            result = response.json()
+        except:
+            result = {"error": "Invalid JSON response", "text": response.text[:200]}
+        
+        print(f"📨 Response ({response.status_code}): {result}")
         return result
         
     except Exception as e:
         print(f"❌ Submission error: {str(e)}")
-        return {"error": str(e)}
+        return {"error": str(e), "correct": False}
 
 
 @app.route('/')
@@ -223,10 +302,17 @@ def home():
 @app.route('/quiz', methods=['POST'])
 def handle_quiz():
     """Main endpoint that receives quiz tasks"""
+    start_time = time.time()
+    
     try:
         data = request.json
+        
+        # Validate JSON
+        if not data:
+            return jsonify({"error": "Invalid JSON"}), 400
+        
         print(f"\n{'='*60}")
-        print(f"📥 NEW QUIZ REQUEST")
+        print(f"📥 NEW QUIZ REQUEST at {time.strftime('%H:%M:%S')}")
         print(f"{'='*60}")
         
         # Verify secret
@@ -239,50 +325,79 @@ def handle_quiz():
             print("❌ Invalid email!")
             return jsonify({"error": "Invalid email"}), 403
         
-        quiz_url = data.get('url')
-        print(f"🔗 Quiz URL: {quiz_url}")
+        # Process quizzes in sequence
+        current_url = data.get('url')
+        quiz_count = 0
+        max_quizzes = 20  # Safety limit
         
-        # Step 1: Scrape the quiz page
-        print("\n📋 Step 1: Scraping quiz page...")
-        quiz_data = scrape_quiz_page(quiz_url)
-        if not quiz_data:
-            return jsonify({"error": "Failed to scrape quiz page"}), 400
+        while current_url and quiz_count < max_quizzes:
+            quiz_count += 1
+            elapsed = time.time() - start_time
+            
+            print(f"\n{'='*60}")
+            print(f"📋 QUIZ {quiz_count} | Elapsed: {elapsed:.1f}s")
+            print(f"{'='*60}")
+            print(f"🔗 URL: {current_url}")
+            
+            # Check 3-minute timeout
+            if elapsed > 170:  # 170 seconds = 2:50, leave buffer
+                print("⚠️ Approaching 3-minute limit, stopping")
+                break
+            
+            # Step 1: Scrape
+            quiz_data = scrape_quiz_page(current_url)
+            if not quiz_data:
+                print("❌ Failed to scrape, moving on")
+                break
+            
+            question = quiz_data['question']
+            print(f"❓ Question: {question[:150]}...")
+            
+            # Step 2: Download files
+            data_context = None
+            if quiz_data['files']:
+                for file_name, file_url in quiz_data['files'].items():
+                    data_context = download_file(file_url)
+                    if data_context:
+                        break
+            
+            # Step 3: Solve
+            answer = solve_with_gpt(question, data_context)
+            if answer is None:
+                print("❌ Failed to solve, moving on")
+                break
+            
+            # Step 4: Submit
+            result = submit_answer(current_url, answer)
+            
+            # Check result
+            if result.get('correct'):
+                print(f"✅ CORRECT!")
+                if result.get('url'):
+                    current_url = result['url']
+                    print(f"➡️  Next quiz: {current_url}")
+                else:
+                    print(f"🎉 Quiz chain complete!")
+                    break
+            else:
+                print(f"❌ INCORRECT: {result.get('reason', 'Unknown error')}")
+                # Could retry here, but moving on for now
+                if result.get('url'):
+                    current_url = result['url']
+                else:
+                    break
         
-        question = quiz_data['question']
-        
-        # Step 2: Download files if any
-        data_context = None
-        if quiz_data['files']:
-            print(f"\n📂 Step 2: Processing files...")
-            for file_name, file_url in quiz_data['files'].items():
-                data_context = download_file(file_url)
-                if data_context:
-                    break  # Use first file for now
-        else:
-            print("\n📂 Step 2: No files to download")
-        
-        # Step 3: Solve with GPT
-        print(f"\n🧠 Step 3: Solving with GPT...")
-        answer = solve_with_gpt(question, data_context)
-        if answer is None:
-            return jsonify({"error": "Failed to solve with GPT"}), 400
-        
-        # Step 4: Submit answer
-        print(f"\n📤 Step 4: Submitting answer...")
-        result = submit_answer(quiz_url, answer)
-        
+        total_time = time.time() - start_time
         print(f"\n{'='*60}")
-        print(f"✅ QUIZ COMPLETE")
-        print(f"Question: {question[:100]}...")
-        print(f"Answer: {answer}")
-        print(f"Result: {result}")
+        print(f"✅ SESSION COMPLETE")
+        print(f"Quizzes attempted: {quiz_count}")
+        print(f"Total time: {total_time:.1f}s")
         print(f"{'='*60}\n")
         
         return jsonify({
             "status": "complete",
-            "question": question,
-            "answer": answer,
-            "result": result
+            "quizzes_attempted": quiz_count,
+            "total_time": total_time
         }), 200
         
     except Exception as e:
