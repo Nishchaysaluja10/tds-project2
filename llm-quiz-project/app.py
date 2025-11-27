@@ -36,7 +36,36 @@ def scrape_quiz_page(url):
             from playwright.sync_api import sync_playwright
             
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
+                try:
+                    browser = p.chromium.launch(headless=True)
+                except Exception as e:
+                    if "Executable doesn't exist" in str(e):
+                        print("⚠️ Playwright browsers missing, installing now...")
+                        import subprocess
+
+                        # Use file lock to prevent race conditions
+                        import fcntl
+                        lock_file = open("/tmp/playwright_install.lock", "w")
+
+                        try:
+                            # Try to acquire lock
+                            fcntl.flock(lock_file, fcntl.LOCK_EX)
+
+                            # Check again if installed (by another process)
+                            try:
+                                browser = p.chromium.launch(headless=True)
+                            except:
+                                # Still missing, proceed with install
+                                subprocess.run(["playwright", "install", "chromium"], check=True)
+                                browser = p.chromium.launch(headless=True)
+
+                        finally:
+                            # Release lock
+                            fcntl.flock(lock_file, fcntl.LOCK_UN)
+                            lock_file.close()
+                    else:
+                        raise e
+
                 page = browser.new_page()
                 
                 # Navigate and wait for content
