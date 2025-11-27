@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: llm-quiz-api
+    env: python
+    buildCommand: cd llm-quiz-project && ./build.sh
+    startCommand: cd llm-quiz-project && gunicorn app:app --timeout 120
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.12
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /opt/render/project/src/playwright-browsers
