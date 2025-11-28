@@ -20,9 +20,10 @@ YOUR_SECRET = os.getenv('YOUR_SECRET')
 AIPIPE_API_KEY = os.getenv('AIPIPE_API_KEY')  # AIpipe.org API key
 
 # Initialize OpenAI client with AIpipe.org endpoint
+# AIpipe proxies OpenAI requests through /openai/* path
 client = OpenAI(
     api_key=AIPIPE_API_KEY,
-    base_url="https://aipipe.org/v1"  # AIpipe.org endpoint
+    base_url="https://aipipe.org/openai/v1"  # AIpipe.org OpenAI proxy endpoint
 )
 
 # Submission endpoint - will be extracted from quiz page
