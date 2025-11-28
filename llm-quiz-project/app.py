@@ -194,6 +194,77 @@ def download_file(url):
             print(f"✅ Excel loaded: {df.shape[0]} rows, {df.shape[1]} columns")
             return df.to_string()
         
+        # Check if it's a SQLite database
+        elif url.endswith('.db') or url.endswith('.sqlite'):
+            import sqlite3
+            import tempfile
+            
+            # Save to temp file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as tmp:
+                tmp.write(response.content)
+                tmp_path = tmp.name
+            
+            # Connect and extract data
+            conn = sqlite3.connect(tmp_path)
+            cursor = conn.cursor()
+            
+            # Get all tables
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            tables = cursor.fetchall()
+            
+            result = f"SQLite Database with {len(tables)} tables:\n\n"
+            
+            # Extract data from each table
+            for table in tables:
+                table_name = table[0]
+                df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
+                result += f"\n=== Table: {table_name} ({df.shape[0]} rows, {df.shape[1]} columns) ===\n"
+                result += df.to_string() + "\n"
+            
+            conn.close()
+            os.unlink(tmp_path)  # Clean up temp file
+            
+            print(f"✅ SQLite DB loaded: {len(tables)} tables")
+            return result
+        
+        # Check if it's a ZIP file
+        elif url.endswith('.zip'):
+            import zipfile
+            import tempfile
+            
+            result = "ZIP Archive Contents:\n\n"
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp:
+                tmp.write(response.content)
+                tmp_path = tmp.name
+            
+            with zipfile.ZipFile(tmp_path, 'r') as zip_ref:
+                file_list = zip_ref.namelist()
+                result += f"Files in archive: {', '.join(file_list)}\n\n"
+                
+                # Extract and process each file
+                for filename in file_list:
+                    file_data = zip_ref.read(filename)
+                    
+                    # Try to process based on file extension
+                    if filename.endswith('.csv'):
+                        df = pd.read_csv(BytesIO(file_data))
+                        result += f"\n=== {filename} ({df.shape[0]} rows, {df.shape[1]} columns) ===\n"
+                        result += df.to_string() + "\n"
+                    elif filename.endswith(('.xlsx', '.xls')):
+                        df = pd.read_excel(BytesIO(file_data))
+                        result += f"\n=== {filename} ({df.shape[0]} rows, {df.shape[1]} columns) ===\n"
+                        result += df.to_string() + "\n"
+                    elif filename.endswith('.txt') or filename.endswith('.json'):
+                        result += f"\n=== {filename} ===\n"
+                        result += file_data.decode('utf-8', errors='ignore') + "\n"
+                    else:
+                        result += f"\n=== {filename} ({len(file_data)} bytes) ===\n"
+            
+            os.unlink(tmp_path)  # Clean up temp file
+            print(f"✅ ZIP loaded: {len(file_list)} files")
+            return result
+        
         # PDF handling (basic)
         elif url.endswith('.pdf'):
             print(f"✅ PDF downloaded: {len(response.content)} bytes")
@@ -205,6 +276,8 @@ def download_file(url):
             
     except Exception as e:
         print(f"❌ File download error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
