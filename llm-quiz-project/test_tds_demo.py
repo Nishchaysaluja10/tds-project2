@@ -17,7 +17,8 @@ YOUR_EMAIL = os.getenv('YOUR_EMAIL')
 YOUR_SECRET = os.getenv('YOUR_SECRET')
 
 # GitHub raw URL for the TDS demo quiz
-GITHUB_QUIZ_URL = "https://raw.githubusercontent.com/Nishchaysaluja10/tds-project2/main/demo_quiz_tds.html"
+# Note: File is in llm-quiz-project subdirectory
+GITHUB_QUIZ_URL = "https://raw.githubusercontent.com/Nishchaysaluja10/tds-project2/main/llm-quiz-project/demo_quiz_tds.html"
 
 def test_tds_demo_quiz():
     print("="*70)
