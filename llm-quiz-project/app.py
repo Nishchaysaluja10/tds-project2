@@ -337,10 +337,13 @@ def home():
     """Health check endpoint"""
     return jsonify({
         "status": "running",
-        "message": "LLM Quiz API with OpenAI 🚀",
-        "email_configured": YOUR_EMAIL is not None,
-        "secret_configured": YOUR_SECRET is not None,
-        "openai_configured": OPENAI_API_KEY is not None
+        "message": "LLM Quiz Solver API",
+        "endpoints": {
+            "/": "Health check",
+            "/quiz": "POST - Solve quiz"
+        },
+        "aipipe_configured": AIPIPE_API_KEY is not None,
+        "credentials_configured": YOUR_EMAIL is not None and YOUR_SECRET is not None
     })
 
 
