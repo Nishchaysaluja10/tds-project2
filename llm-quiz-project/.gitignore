@@ -8,3 +8,4 @@ venv/
 demo_page.html
 .DS_Store
 demo_page.htmldocs/
+tests/
