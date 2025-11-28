@@ -1,11 +1,33 @@
-# .gitignore file content
+# Environment variables
 .env
+
+# Python
 *.pyc
 __pycache__/
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
 venv/
 .venv/
+env/
+ENV/
+
+# Logs
 *.log
-demo_page.html
+
+# OS files
 .DS_Store
-demo_page.htmldocs/
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project-specific (keep locally, not on GitHub)
+docs/
 tests/
+demo_page.html
