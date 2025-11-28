@@ -17,10 +17,13 @@ app = Flask(__name__)
 # Your credentials
 YOUR_EMAIL = os.getenv('YOUR_EMAIL')
 YOUR_SECRET = os.getenv('YOUR_SECRET')
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+AIPIPE_API_KEY = os.getenv('AIPIPE_API_KEY')  # AIpipe.org API key
 
-# Initialize OpenAI client
-client = OpenAI(api_key=OPENAI_API_KEY)
+# Initialize OpenAI client with AIpipe.org endpoint
+client = OpenAI(
+    api_key=AIPIPE_API_KEY,
+    base_url="https://api.aipipe.org/v1"  # AIpipe.org endpoint
+)
 
 # Submission endpoint - will be extracted from quiz page
 SUBMIT_ENDPOINT = None  # Don't hardcode - extract from page
