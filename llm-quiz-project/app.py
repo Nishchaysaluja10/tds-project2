@@ -114,23 +114,19 @@ def scrape_quiz_page(url):
         if not question_text:
             # Try alternative selectors
             print("⚠️ No #result div, trying alternatives")
-            for selector in ['#quiz', '#question', '.question', 'main', 'article']:
+            for selector in ['#quiz', '#question', '.question', 'main', 'article', 'body']:
                 elem = soup.select_one(selector)
                 if elem:
+                    # Remove scripts, styles, nav, footer
+                    for tag in elem(['script', 'style', 'nav', 'footer']):
+                        tag.decompose()
                     text = elem.get_text(strip=True)
-                    if len(text) > 20:
+                    if text:  # Accept ANY non-empty text
                         question_text = text
-                        print(f"✅ Question found in {selector}")
+                        print(f"✅ Question found in {selector}: {len(text)} chars")
                         break
         
-        # Last resort - get body text
-        if not question_text or len(question_text) < 10:
-            body = soup.find('body')
-            if body:
-                for script in body(['script', 'style', 'nav', 'footer']):
-                    script.decompose()
-                question_text = body.get_text(strip=True)
-                print(f"⚠️ Using body text as question")
+
         
         # Only return None if we truly have no content at all
         if not question_text:
