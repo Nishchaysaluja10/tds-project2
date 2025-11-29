@@ -132,9 +132,12 @@ def scrape_quiz_page(url):
                 question_text = body.get_text(strip=True)
                 print(f"⚠️ Using body text as question")
         
-        if not question_text or len(question_text) < 10:
-            print("❌ No meaningful content found")
+        # Only return None if we truly have no content at all
+        if not question_text:
+            print("❌ No content found")
             return None
+        
+        print(f"✅ Extracted content ({len(question_text)} chars)")
         
         # Look for submit URL in the page
         global SUBMIT_ENDPOINT
