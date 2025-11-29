@@ -137,7 +137,7 @@ def scrape_quiz_page(url):
             print("❌ No content found")
             return None
         
-        print(f"✅ Extracted content ({len(question_text)} chars)")
+        print(f"✅ Extracted content ({len(question_text)} chars) [v2-fixed]")
         
         # Look for submit URL in the page
         global SUBMIT_ENDPOINT
