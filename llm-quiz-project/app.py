@@ -1,6 +1,11 @@
 from flask import Flask, request, jsonify
 import os
 from dotenv import load_dotenv
+load_dotenv()
+
+# Version tracking for deployment verification
+API_VERSION = "v2.1-fixed-scraping"
+
 import requests
 from bs4 import BeautifulSoup
 from openai import OpenAI
@@ -410,6 +415,7 @@ def home():
     """Health check endpoint"""
     return jsonify({
         "status": "running",
+        "version": API_VERSION,
         "message": "LLM Quiz Solver API",
         "endpoints": {
             "/": "Health check",
