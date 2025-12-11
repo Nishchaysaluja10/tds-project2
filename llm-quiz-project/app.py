@@ -36,49 +36,16 @@ SUBMIT_ENDPOINT = None  # Don't hardcode - extract from page
 
 
 def scrape_quiz_page(url):
-    """Fetch the quiz page and extract the question (handles JavaScript)"""
+    """Fetch the quiz page and extract the question using requests library"""
     try:
         print(f"Scraping: {url}")
         
-        # Try with Playwright first (for JavaScript-rendered pages)
-        try:
-            from playwright.sync_api import sync_playwright
-            
-            with sync_playwright() as p:
-                try:
-                    browser = p.chromium.launch(headless=True)
-                except Exception as e:
-                    # Don't try to install during request - browsers should be installed by build.sh
-                    # Just fall back to requests
-                    print(f"⚠️ Playwright browser launch failed: {str(e)}")
-                    print("⚠️ Falling back to requests library")
-                    response = requests.get(url, timeout=10)
-                    response.raise_for_status()
-                    content = response.text
-                else:
-                    page = browser.new_page()
-                    
-                    # Navigate and wait for content
-                    page.goto(url, wait_until='networkidle', timeout=30000)
-                    
-                    # Wait for result div
-                    try:
-                        page.wait_for_selector('#result', timeout=5000)
-                    except:
-                        print("⚠️ Timeout waiting for #result, continuing anyway")
-                    
-                    # Wait a bit for JavaScript
-                    page.wait_for_timeout(2000)
-                    
-                    # Get rendered HTML
-                    content = page.content()
-                    browser.close()
-                
-        except ImportError:
-            print("⚠️ Playwright not available, using requests")
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            content = response.text
+        # Use requests library directly (Playwright browsers don't install on Render)
+        # This avoids 30-second timeout trying to launch Playwright for each quiz
+        print("📡 Using requests library (Playwright disabled for speed)")
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        content = response.text
         
         # Parse with BeautifulSoup
         soup = BeautifulSoup(content, 'html.parser')
