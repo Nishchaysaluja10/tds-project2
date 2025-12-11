@@ -178,36 +178,34 @@ def scrape_quiz_page(url):
 
 def transcribe_audio(audio_url):
     """Transcribe audio file using Whisper API"""
-    try:
-        print(f"🎧 Transcribing audio with Whisper: {audio_url}")
-        
-        # Download audio
-        response = requests.get(audio_url, timeout=10)
-        response.raise_for_status()
-        
-        # Save to temp file
-        import tempfile
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp:
-            tmp.write(response.content)
-            audio_file_path = tmp.name
-        
-        # Transcribe with Whisper
-        with open(audio_file_path, 'rb') as audio_file:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file
-            )
-        
-        os.unlink(audio_file_path)
-        answer = transcript.text.strip()
-        print(f"✅ Whisper transcription: {answer}")
-        return answer
-        
-    except Exception as e:
-        print(f"❌ Audio transcription error: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return None
+    # TEMPORARY: Whisper disabled due to AIpipe compatibility issues
+    # Return None to skip audio quiz for now
+    print(f"⚠️  Audio transcription disabled (AIpipe incompatible)")
+    return "unable to transcribe"
+    
+    # Original code commented out:
+    # try:
+    #     print(f"🎧 Transcribing audio with Whisper: {audio_url}")
+    #     response = requests.get(audio_url, timeout=10)
+    #     response.raise_for_status()
+    #     import tempfile
+    #     with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp:
+    #         tmp.write(response.content)
+    #         audio_file_path = tmp.name
+    #     with open(audio_file_path, 'rb') as audio_file:
+    #         transcript = client.audio.transcriptions.create(
+    #             model="whisper-1",
+    #             file=audio_file
+    #         )
+    #     os.unlink(audio_file_path)
+    #     answer = transcript.text.strip()
+    #     print(f"✅ Whisper transcription: {answer}")
+    #     return answer
+    # except Exception as e:
+    #     print(f"❌ Audio transcription error: {str(e)}")
+    #     import traceback
+    #     traceback.print_exc()
+    #     return None
 
 
 def normalize_csv_to_json(csv_text):
@@ -807,11 +805,10 @@ def handle_quiz():
             else:
                 answer = solve_with_gpt(question, data_context or json_text, quiz_url=current_url)
             
+            # Always submit answer (even if None) to get next URL and avoid infinite loop
             if answer is None:
-                print("❌ Failed to solve this quiz, continuing to next...")
-                # Don't break - continue to next quiz even if one fails
-                # Just submit empty answer or skip
-                continue
+                print("⚠️  No answer generated, submitting placeholder to continue...")
+                answer = "unable to solve"
             
             # Step 4: Submit
             result = submit_answer(current_url, answer)
