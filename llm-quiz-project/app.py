@@ -155,8 +155,9 @@ def scrape_quiz_page(url):
             files[filename] = src
             print(f"📎 File found (img): {filename} -> {src}")
         
-        # Extract file paths from text (e.g., "Open /project2/heatmap.png")
+        # Extract file paths from text (e.g., "Open /project2/heatmap.png" or "Listen to /project2/audio-passphrase.mp3")
         import re
+        # More permissive pattern to catch audio files with dashes
         file_patterns = re.findall(r'/project2/([\w\-\.]+\.(?:png|jpg|jpeg|gif|csv|json|txt|xlsx|pdf|mp3|wav|m4a))', question_text)
         for filename in file_patterns:
             file_url = urljoin(url, f'/project2/{filename}')
@@ -220,13 +221,19 @@ def normalize_csv_to_json(csv_text):
         # Sort by first column
         df = df.sort_values(by=df.columns[0])
         
-        # Convert to JSON with no spaces after separators
-        result = df.to_json(orient='records', separators=(',', ':'))
+        # Convert to JSON - pandas to_json doesn't support separators parameter
+        # Use orient='records' which gives [{...},{...}] format
+        import json
+        records = df.to_dict(orient='records')
+        # Manually format JSON with no spaces
+        result = json.dumps(records, separators=(',', ':'))
         print(f"📊 CSV normalized to JSON: {len(result)} chars")
         return result
         
     except Exception as e:
         print(f"❌ CSV normalization error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -754,8 +761,10 @@ def handle_quiz():
                 answer = solve_with_gpt(question, data_context or json_text, quiz_url=current_url)
             
             if answer is None:
-                print("❌ Failed to solve, moving on")
-                break
+                print("❌ Failed to solve this quiz, continuing to next...")
+                # Don't break - continue to next quiz even if one fails
+                # Just submit empty answer or skip
+                continue
             
             # Step 4: Submit
             result = submit_answer(current_url, answer)
