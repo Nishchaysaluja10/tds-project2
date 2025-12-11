@@ -266,12 +266,13 @@ def count_github_tree_files(tree_json, prefix, extension, email):
         data = json.loads(tree_json)
         
         count = 0
+        print(f"🔍 Searching for files: prefix='{prefix}', extension='{extension}'")
         for item in data.get('tree', []):
             path = item.get('path', '')
             # Check if path starts with prefix and ends with extension
             if path.startswith(prefix) and path.endswith(extension):
                 count += 1
-                print(f"  Found: {path}")
+                print(f"  ✅ Found #{count}: {path}")
         
         # Add email length mod 2
         offset = len(email) % 2
@@ -288,68 +289,33 @@ def count_github_tree_files(tree_json, prefix, extension, email):
 
 
 def analyze_image_with_gpt(image_url, question):
-    """Analyze an image using GPT-4 Vision"""
+    """Analyze an image using PIL to find most frequent color"""
     try:
-        print(f"🖼️  Analyzing image with GPT-4 Vision: {image_url}")
+        print(f"🖼️  Analyzing image with PIL: {image_url}")
         
         # Download image
         response = requests.get(image_url, timeout=10)
         response.raise_for_status()
         
-        # Encode to base64
-        import base64
-        base64_image = base64.b64encode(response.content).decode('utf-8')
+        # Use PIL to analyze pixels
+        from PIL import Image
+        from collections import Counter
+        from io import BytesIO
         
-        # Determine image type
-        if image_url.endswith('.png'):
-            mime_type = 'image/png'
-        elif image_url.endswith(('.jpg', '.jpeg')):
-            mime_type = 'image/jpeg'
-        elif image_url.endswith('.gif'):
-            mime_type = 'image/gif'
-        else:
-            mime_type = 'image/png'  # default
+        img = Image.open(BytesIO(response.content))
+        pixels = list(img.getdata())
         
-        # Call GPT-4 Vision
-        vision_prompt = f"""Analyze this heatmap image.
-
-Question: {question}
-
-Return ONLY the hex code of the most frequent color in lowercase #rrggbb format. No explanations.
-
-Hex code:"""
+        # Count colors
+        color_counts = Counter(pixels)
+        most_common = color_counts.most_common(1)[0]
         
-        response = client.chat.completions.create(
-            model="gpt-4o",  # GPT-4o has vision capabilities
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": vision_prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{mime_type};base64,{base64_image}"
-                            }
-                        }
-                    ]
-                }
-            ],
-            temperature=0,
-            max_tokens=500
-        )
+        # Convert to hex
+        r, g, b = most_common[0][:3]  # Handle RGBA
+        hex_color = f"#{r:02x}{g:02x}{b:02x}"
         
-        answer = response.choices[0].message.content.strip()
-        print(f"✅ GPT-4 Vision answer: {answer}")
+        print(f"✅ Most frequent color: {hex_color} ({most_common[1]} pixels)")
         
-        # Parse hex code from response (might have explanation before it)
-        import re
-        hex_match = re.search(r'#[0-9a-fA-F]{6}', answer)
-        if hex_match:
-            answer = hex_match.group(0).lower()
-            print(f"🎨 Extracted hex code: {answer}")
-        
-        return answer
+        return hex_color
         
     except Exception as e:
         print(f"❌ Image analysis error: {str(e)}")
