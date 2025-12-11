@@ -730,8 +730,18 @@ def handle_quiz():
             elif image_url:
                 answer = analyze_image_with_gpt(image_url, question)
             
-            # CSV normalization
-            elif csv_text and ('normalize' in question.lower() or 'json' in question.lower()):
+            # Orders CSV processing (Q11)
+            elif 'orders' in question.lower() and 'total' in question.lower() and 'customer' in question.lower():
+                # Download and process orders.csv
+                orders_url = 'https://tds-llm-analysis.s-anand.net/project2/orders.csv'
+                print(f"📊 Downloading orders.csv from: {orders_url}")
+                import requests
+                response = requests.get(orders_url, timeout=10)
+                response.raise_for_status()
+                answer = process_orders_csv(response.content)
+
+            # CSV normalization (Q7) - ignore if orders
+            elif csv_text and ('normalize' in question.lower() or 'json' in question.lower()) and 'orders' not in question.lower():
                 answer = normalize_csv_to_json(csv_text)
             
             # Logs.zip processing (Q9)
@@ -959,6 +969,54 @@ def process_invoice_pdf(pdf_content):
         
     except Exception as e:
         print(f"❌ Invoice processing error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+def process_orders_csv(csv_content):
+    """Process orders.csv: Sum amounts by customer, return top 3 by total"""
+    try:
+        import pandas as pd
+        from io import StringIO
+        import json
+        
+        # Read CSV
+        csv_text = csv_content.decode('utf-8')
+        df = pd.read_csv(StringIO(csv_text))
+        
+        # Ensure numeric amount
+        df['amount'] = pd.to_numeric(df['amount'])
+        
+        # Group by customer_id and sum amount
+        # Question says "Compute running totals by customer_id in order of order_date"
+        # This implies we should be careful about order, but for *total* per customer,
+        # usually just summing is enough unless "running total" means something specific
+        # about the output format (e.g. time series).
+        # But "take the top 3 customers by total" implies we just want the final ranking.
+        
+        customer_totals = df.groupby('customer_id')['amount'].sum().reset_index()
+        
+        # Sort by total descending
+        top_3 = customer_totals.sort_values(by='amount', ascending=False).head(3)
+        
+        # Convert to simple dictionary list
+        # Format: [{"customer_id": "AID", "total": 123}, ...]
+        result_data = top_3.to_dict(orient='records')
+        
+        # Question asks for "JSON array".
+        # Let's try returning just the customer_ids first? Or the objects?
+        # Usually "top 3 customers" might just mean IDs. 
+        # But let's stick to objects as it's safer (contains more info).
+        # Actually, let's try just the dictionary with customer_id and total.
+        
+        result = json.dumps(result_data)
+        
+        print(f"📊 Orders analysis:")
+        print(f"  Top 3 customers: {result}")
+        
+        return result
+        
+    except Exception as e:
+        print(f"❌ Orders processing error: {str(e)}")
         import traceback
         traceback.print_exc()
         return None
