@@ -3,26 +3,412 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-# Version tracking
-API_VERSION = "v3.0-document-analyzer"
+# Version tracking for deployment verification
+API_VERSION = "v4.0-reevaluation"
 
 import requests
 from bs4 import BeautifulSoup
 from openai import OpenAI
 import pandas as pd
 from io import StringIO, BytesIO
-import json
+from urllib.parse import urljoin
+import time
+
+# Load environment variables
+load_dotenv()
 
 app = Flask(__name__)
 
-# Environment variables
-AIPIPE_API_KEY = os.getenv('AIPIPE_API_KEY')
+# Your credentials
+YOUR_EMAIL = os.getenv('YOUR_EMAIL')
+YOUR_SECRET = os.getenv('YOUR_SECRET')
+AIPIPE_API_KEY = os.getenv('AIPIPE_API_KEY')  # AIpipe.org API key
 
-# Initialize OpenAI client
+# Initialize OpenAI client with AIpipe.org endpoint
+# AIpipe proxies OpenAI requests through /openai/* path
 client = OpenAI(
     api_key=AIPIPE_API_KEY,
-    base_url="https://aipipe.org/openai/v1"
+    base_url="https://aipipe.org/openai/v1"  # AIpipe.org OpenAI proxy endpoint
 )
+
+# Submission endpoint - will be extracted from quiz page
+SUBMIT_ENDPOINT = None  # Don't hardcode - extract from page
+
+
+def scrape_quiz_page(url):
+    """Fetch the quiz page and extract the question (handles JavaScript)"""
+    try:
+        print(f"Scraping: {url}")
+        
+        # Try with Playwright first (for JavaScript-rendered pages)
+        try:
+            from playwright.sync_api import sync_playwright
+            
+            with sync_playwright() as p:
+                try:
+                    browser = p.chromium.launch(headless=True)
+                except Exception as e:
+                    # Don't try to install during request - browsers should be installed by build.sh
+                    # Just fall back to requests
+                    print(f"⚠️ Playwright browser launch failed: {str(e)}")
+                    print("⚠️ Falling back to requests library")
+                    response = requests.get(url, timeout=10)
+                    response.raise_for_status()
+                    content = response.text
+                else:
+                    page = browser.new_page()
+                    
+                    # Navigate and wait for content
+                    page.goto(url, wait_until='networkidle', timeout=30000)
+                    
+                    # Wait for result div
+                    try:
+                        page.wait_for_selector('#result', timeout=5000)
+                    except:
+                        print("⚠️ Timeout waiting for #result, continuing anyway")
+                    
+                    # Wait a bit for JavaScript
+                    page.wait_for_timeout(2000)
+                    
+                    # Get rendered HTML
+                    content = page.content()
+                    browser.close()
+                
+        except ImportError:
+            print("⚠️ Playwright not available, using requests")
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            content = response.text
+        
+        # Parse with BeautifulSoup
+        soup = BeautifulSoup(content, 'html.parser')
+        
+        # Try to find result div
+        result_div = soup.find('div', id='result')
+        question_text = None
+        
+        if result_div:
+            question_text = result_div.get_text(strip=True)
+            if question_text:
+                print(f"✅ Question found in #result: {question_text[:100]}...")
+            else:
+                # Result div is empty - likely JavaScript-rendered
+                # Try to extract base64 content from script tags
+                print("⚠️ #result div is empty, checking for base64 in scripts")
+                import re
+                import base64
+                
+                for script in soup.find_all('script'):
+                    script_text = script.string
+                    if script_text and 'atob' in script_text:
+                        # Extract base64 content from atob() calls
+                        matches = re.findall(r'atob\([`\'"]([A-Za-z0-9+/=\s]+)[`\'"]\)', script_text)
+                        for match in matches:
+                            try:
+                                # Remove whitespace and decode
+                                decoded = base64.b64decode(match.replace('\n', '').replace(' ', '')).decode('utf-8')
+                                if len(decoded) > 20:
+                                    question_text = decoded
+                                    print(f"✅ Decoded base64 question: {question_text[:100]}...")
+                                    break
+                            except Exception as e:
+                                print(f"⚠️ Failed to decode base64: {e}")
+                        if question_text:
+                            break
+        
+        if not question_text:
+            # Try alternative selectors
+            print("⚠️ No #result div, trying alternatives")
+            for selector in ['#quiz', '#question', '.question', 'main', 'article', 'body']:
+                elem = soup.select_one(selector)
+                if elem:
+                    # Remove scripts, styles, nav, footer
+                    for tag in elem(['script', 'style', 'nav', 'footer']):
+                        tag.decompose()
+                    text = elem.get_text(strip=True)
+                    if text:  # Accept ANY non-empty text
+                        question_text = text
+                        print(f"✅ Question found in {selector}: {len(text)} chars")
+                        break
+        
+
+        
+        # Only return None if we truly have no content at all
+        if not question_text:
+            print("❌ No content found")
+            return None
+        
+        print(f"✅ Extracted content ({len(question_text)} chars) [v2-fixed]")
+        
+        # Look for submit URL in the page
+        global SUBMIT_ENDPOINT
+        for text in soup.stripped_strings:
+            if 'submit' in text.lower() and ('http://' in text or 'https://' in text):
+                # Try to extract URL
+                import re
+                urls = re.findall(r'https?://[^\s<>"]+', text)
+                if urls:
+                    SUBMIT_ENDPOINT = urls[0]
+                    print(f"📤 Submit endpoint found: {SUBMIT_ENDPOINT}")
+                    break
+        
+        # Look for downloadable files
+        files = {}
+        for link in soup.find_all('a', href=True):
+            href = link['href']
+            text = link.get_text(strip=True)
+            
+            if (link.get('download') or 
+                'download' in text.lower() or 
+                any(href.endswith(ext) for ext in ['.csv', '.xlsx', '.xls', '.pdf', '.txt', '.json'])):
+                
+                if not href.startswith('http'):
+                    href = urljoin(url, href)
+                files[text or 'file'] = href
+                print(f"📎 File found: {text} -> {href}")
+        
+        return {
+            'question': question_text,
+            'files': files
+        }
+        
+    except Exception as e:
+        print(f"❌ Scraping error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def download_file(url):
+    """Download file and return content as string"""
+    try:
+        print(f"Downloading file: {url}")
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        
+        # Check if it's a CSV file
+        if url.endswith('.csv') or 'csv' in response.headers.get('content-type', '').lower():
+            df = pd.read_csv(StringIO(response.text))
+            print(f"✅ CSV loaded: {df.shape[0]} rows, {df.shape[1]} columns")
+            return df.to_string()
+        
+        # Check if it's Excel
+        elif url.endswith(('.xlsx', '.xls')):
+            df = pd.read_excel(BytesIO(response.content))
+            print(f"✅ Excel loaded: {df.shape[0]} rows, {df.shape[1]} columns")
+            return df.to_string()
+        
+        # Check if it's a SQLite database
+        elif url.endswith('.db') or url.endswith('.sqlite'):
+            import sqlite3
+            import tempfile
+            
+            # Save to temp file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as tmp:
+                tmp.write(response.content)
+                tmp_path = tmp.name
+            
+            # Connect and extract data
+            conn = sqlite3.connect(tmp_path)
+            cursor = conn.cursor()
+            
+            # Get all tables
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            tables = cursor.fetchall()
+            
+            result = f"SQLite Database with {len(tables)} tables:\n\n"
+            
+            # Extract data from each table
+            for table in tables:
+                table_name = table[0]
+                df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
+                result += f"\n=== Table: {table_name} ({df.shape[0]} rows, {df.shape[1]} columns) ===\n"
+                result += df.to_string() + "\n"
+            
+            conn.close()
+            os.unlink(tmp_path)  # Clean up temp file
+            
+            print(f"✅ SQLite DB loaded: {len(tables)} tables")
+            return result
+        
+        # Check if it's a ZIP file
+        elif url.endswith('.zip'):
+            import zipfile
+            import tempfile
+            
+            result = "ZIP Archive Contents:\n\n"
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp:
+                tmp.write(response.content)
+                tmp_path = tmp.name
+            
+            with zipfile.ZipFile(tmp_path, 'r') as zip_ref:
+                file_list = zip_ref.namelist()
+                result += f"Files in archive: {', '.join(file_list)}\n\n"
+                
+                # Extract and process each file
+                for filename in file_list:
+                    file_data = zip_ref.read(filename)
+                    
+                    # Try to process based on file extension
+                    if filename.endswith('.csv'):
+                        df = pd.read_csv(BytesIO(file_data))
+                        result += f"\n=== {filename} ({df.shape[0]} rows, {df.shape[1]} columns) ===\n"
+                        result += df.to_string() + "\n"
+                    elif filename.endswith(('.xlsx', '.xls')):
+                        df = pd.read_excel(BytesIO(file_data))
+                        result += f"\n=== {filename} ({df.shape[0]} rows, {df.shape[1]} columns) ===\n"
+                        result += df.to_string() + "\n"
+                    elif filename.endswith('.txt') or filename.endswith('.json'):
+                        result += f"\n=== {filename} ===\n"
+                        result += file_data.decode('utf-8', errors='ignore') + "\n"
+                    else:
+                        result += f"\n=== {filename} ({len(file_data)} bytes) ===\n"
+            
+            os.unlink(tmp_path)  # Clean up temp file
+            print(f"✅ ZIP loaded: {len(file_list)} files")
+            return result
+        
+        # PDF handling (basic)
+        elif url.endswith('.pdf'):
+            print(f"✅ PDF downloaded: {len(response.content)} bytes")
+            return f"PDF file with {len(response.content)} bytes"
+        
+        else:
+            print(f"✅ Text file loaded: {len(response.text)} characters")
+            return response.text
+            
+    except Exception as e:
+        print(f"❌ File download error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def solve_with_gpt(question, data_context=None):
+    """Use GPT to solve the question"""
+    try:
+        # Build the prompt
+        prompt = f"""You are solving a data analysis quiz question. 
+
+Question: {question}
+"""
+        
+        if data_context:
+            # Limit context size to avoid token limits
+            if len(data_context) > 8000:
+                prompt += f"\n\nData provided (truncated):\n{data_context[:8000]}...\n"
+            else:
+                prompt += f"\n\nData provided:\n{data_context}\n"
+        
+        prompt += """
+Important instructions:
+- Provide ONLY the final answer
+- If it's a number, give just the number (no units, no commas, no formatting)
+- If it's a yes/no question, answer with just "yes" or "no" (or true/false)
+- If it's a calculation, show only the result
+- No explanations or reasoning
+- Be precise and exact
+
+Answer:"""
+
+        print("🤖 Calling GPT...")
+        
+        # Call OpenAI API
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a precise data analyst. Always provide exact, concise answers with no explanations."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0,
+            max_tokens=500
+        )
+        
+        answer = response.choices[0].message.content.strip()
+        print(f"✅ GPT raw answer: {answer}")
+        
+        # Clean up the answer
+        answer = answer.replace('Answer:', '').strip()
+        answer = answer.replace('The answer is', '').strip()
+        answer = answer.replace('The result is', '').strip()
+        
+        return parse_answer(answer)
+            
+    except Exception as e:
+        print(f"❌ GPT error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def parse_answer(answer_text):
+    """Parse answer to appropriate type (boolean, number, string)"""
+    answer = answer_text.strip()
+    
+    # Try boolean
+    if answer.lower() in ['true', 'yes']:
+        return True
+    if answer.lower() in ['false', 'no']:
+        return False
+    
+    # Try number (remove commas first)
+    try:
+        clean = answer.replace(',', '')
+        if '.' in clean:
+            return float(clean)
+        return int(clean)
+    except ValueError:
+        pass
+    
+    # Return as string
+    return answer
+
+
+def submit_answer(quiz_url, answer):
+    """Submit the answer back to the evaluation system"""
+    global SUBMIT_ENDPOINT
+    
+    # Use extracted submit endpoint or default
+    submit_url = SUBMIT_ENDPOINT or "https://tds-llm-analysis.s-anand.net/submit"
+    
+    try:
+        # CRITICAL: Use YOUR actual credentials, not template text
+        payload = {
+            "email": YOUR_EMAIL,  # Your actual email
+            "secret": YOUR_SECRET,  # Your actual secret (NOT "your secret")
+            "url": quiz_url,  # The actual quiz URL (NOT "this page's URL")
+            "answer": answer  # Your computed answer
+        }
+        
+        print(f"📤 Submitting to: {submit_url}")
+        print(f"📤 Email: {YOUR_EMAIL}")
+        print(f"📤 Secret: {'*' * len(YOUR_SECRET)}")  # Don't print actual secret
+        print(f"📤 URL: {quiz_url}")
+        print(f"📤 Answer: {answer} (type: {type(answer).__name__})")
+        
+        response = requests.post(submit_url, json=payload, timeout=30)
+        
+        # Parse response
+        try:
+            result = response.json()
+        except:
+            result = {"error": "Invalid JSON response", "text": response.text[:200]}
+        
+        print(f"📨 Status: {response.status_code}")
+        print(f"📨 Response: {result}")
+        
+        return result
+        
+    except Exception as e:
+        print(f"❌ Submission error: {str(e)}")
+        return {"error": str(e), "correct": False}
 
 @app.route('/')
 def home():
@@ -30,162 +416,132 @@ def home():
     return jsonify({
         "status": "running",
         "version": API_VERSION,
-        "name": "AI Document Analyzer API",
+        "message": "LLM Quiz Solver API",
         "endpoints": {
             "/": "Health check",
-            "/analyze": "POST - Analyze document or data",
-            "/ask": "POST - Ask questions about data"
+            "/quiz": "POST - Solve quiz"
         },
-        "supported_formats": ["CSV", "JSON", "Text", "URL"],
-        "ai_configured": AIPIPE_API_KEY is not None
+        "aipipe_configured": AIPIPE_API_KEY is not None,
+        "credentials_configured": YOUR_EMAIL is not None and YOUR_SECRET is not None
     })
 
 
-@app.route('/analyze', methods=['POST'])
-def analyze_document():
-    """
-    Analyze any document or data
+@app.route('/quiz', methods=['POST'])
+def handle_quiz():
+    """Main endpoint that receives quiz tasks"""
+    start_time = time.time()
     
-    Request body:
-    {
-        "data": "CSV data or text content",
-        "type": "csv|json|text",
-        "question": "What insights can you provide?" (optional)
-    }
-    
-    OR
-    
-    {
-        "url": "https://example.com/data.csv",
-        "question": "Analyze this data" (optional)
-    }
-    """
     try:
         data = request.json
         
-        # Get data from request
-        if 'url' in data:
-            # Download from URL
-            response = requests.get(data['url'], timeout=10)
-            content = response.text
-            data_type = data.get('type', 'csv')
-        elif 'data' in data:
-            content = data['data']
-            data_type = data.get('type', 'text')
-        else:
-            return jsonify({"error": "Please provide 'data' or 'url'"}), 400
+        # Validate JSON
+        if not data:
+            return jsonify({"error": "Invalid JSON"}), 400
         
-        # Process based on type
-        if data_type == 'csv':
-            df = pd.read_csv(StringIO(content))
-            data_summary = f"CSV Data ({len(df)} rows, {len(df.columns)} columns)\n\n"
-            data_summary += f"Columns: {', '.join(df.columns)}\n\n"
-            data_summary += f"First 5 rows:\n{df.head().to_string()}\n\n"
-            data_summary += f"Statistics:\n{df.describe().to_string()}"
-        elif data_type == 'json':
-            json_data = json.loads(content)
-            data_summary = f"JSON Data:\n{json.dumps(json_data, indent=2)}"
-        else:
-            data_summary = f"Text Content:\n{content[:2000]}"
+        print(f"\n{'='*60}")
+        print(f"📥 NEW QUIZ REQUEST at {time.strftime('%H:%M:%S')}")
+        print(f"{'='*60}")
         
-        # Get question or use default
-        question = data.get('question', 'Provide a comprehensive analysis of this data, including key insights, patterns, and notable findings.')
+        # Verify secret
+        if data.get('secret') != YOUR_SECRET:
+            print("❌ Invalid secret!")
+            return jsonify({"error": "Invalid secret"}), 403
         
-        # Ask GPT-4
-        prompt = f"""Analyze the following data and answer the question.
-
-Data:
-{data_summary}
-
-Question: {question}
-
-Provide a clear, concise answer with specific insights from the data."""
+        # Verify email
+        if data.get('email') != YOUR_EMAIL:
+            print("❌ Invalid email!")
+            return jsonify({"error": "Invalid email"}), 403
         
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a data analyst providing clear, actionable insights."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3
-        )
+        # Process quizzes in sequence
+        current_url = data.get('url')
+        quiz_count = 0
+        max_quizzes = 20  # Safety limit
         
-        answer = response.choices[0].message.content
+        while current_url and quiz_count < max_quizzes:
+            quiz_count += 1
+            elapsed = time.time() - start_time
+            
+            print(f"\n{'='*60}")
+            print(f"📋 QUIZ {quiz_count} | Elapsed: {elapsed:.1f}s")
+            print(f"{'='*60}")
+            print(f"🔗 URL: {current_url}")
+            
+            # Check 3-minute timeout
+            if elapsed > 170:  # 170 seconds = 2:50, leave buffer
+                print("⚠️ Approaching 3-minute limit, stopping")
+                break
+            
+            # Step 1: Scrape
+            quiz_data = scrape_quiz_page(current_url)
+            if not quiz_data:
+                print("❌ Failed to scrape, moving on")
+                break
+            
+            question = quiz_data['question']
+            print(f"❓ Question: {question[:150]}...")
+            
+            # Step 2: Download files
+            data_context = None
+            if quiz_data['files']:
+                for file_name, file_url in quiz_data['files'].items():
+                    data_context = download_file(file_url)
+                    if data_context:
+                        break
+            
+            # Step 3: Solve
+            answer = solve_with_gpt(question, data_context)
+            if answer is None:
+                print("❌ Failed to solve, moving on")
+                break
+            
+            # Step 4: Submit
+            result = submit_answer(current_url, answer)
+            
+            # Check result
+            if result.get('correct'):
+                print(f"✅ CORRECT!")
+                if result.get('url'):
+                    current_url = result['url']
+                    print(f"➡️  Next quiz: {current_url}")
+                else:
+                    print(f"🎉 Quiz chain complete!")
+                    break
+            else:
+                print(f"❌ INCORRECT: {result.get('reason', 'Unknown error')}")
+                # Could retry here, but moving on for now
+                if result.get('url'):
+                    current_url = result['url']
+                else:
+                    break
         
-        return jsonify({
-            "status": "success",
-            "data_type": data_type,
-            "question": question,
-            "answer": answer,
-            "tokens_used": response.usage.total_tokens
-        })
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route('/ask', methods=['POST'])
-def ask_question():
-    """
-    Ask a specific question about provided data
-    
-    Request body:
-    {
-        "data": "Your data here (CSV, JSON, or text)",
-        "question": "What is the average value?",
-        "type": "csv|json|text" (optional, defaults to text)
-    }
-    """
-    try:
-        data = request.json
-        
-        if 'data' not in data or 'question' not in data:
-            return jsonify({"error": "Please provide both 'data' and 'question'"}), 400
-        
-        content = data['data']
-        question = data['question']
-        data_type = data.get('type', 'text')
-        
-        # Process data
-        if data_type == 'csv':
-            df = pd.read_csv(StringIO(content))
-            context = f"CSV with {len(df)} rows:\n{df.to_string()}"
-        elif data_type == 'json':
-            context = f"JSON data:\n{json.dumps(json.loads(content), indent=2)}"
-        else:
-            context = content
-        
-        # Ask GPT-4
-        prompt = f"""Answer the question based on the provided data.
-
-Data:
-{context[:3000]}
-
-Question: {question}
-
-Provide a direct, specific answer."""
-        
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that answers questions accurately based on provided data."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0
-        )
-        
-        answer = response.choices[0].message.content
+        total_time = time.time() - start_time
+        print(f"\n{'='*60}")
+        print(f"✅ SESSION COMPLETE")
+        print(f"Quizzes attempted: {quiz_count}")
+        print(f"Total time: {total_time:.1f}s")
+        print(f"{'='*60}\n")
         
         return jsonify({
-            "status": "success",
-            "question": question,
-            "answer": answer,
-            "tokens_used": response.usage.total_tokens
-        })
+            "status": "complete",
+            "quizzes_attempted": quiz_count,
+            "total_time": total_time
+        }), 200
         
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"\n❌ ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 400
 
 
 if __name__ == '__main__':
+    print("\n" + "="*60)
+    print("🚀 Starting LLM Quiz API with OpenAI")
+    print("="*60)
+    print(f"📧 Email: {YOUR_EMAIL}")
+    print(f"🔑 Secret: {'✅ SET' if YOUR_SECRET else '❌ NOT SET'}")
+    print(f"🤖 OpenAI Key: {'✅ SET' if OPENAI_API_KEY else '❌ NOT SET'}")
+    print(f"🌐 Server: http://localhost:5000")
+    print("="*60 + "\n")
+    
     app.run(debug=True, host='0.0.0.0', port=5000)
