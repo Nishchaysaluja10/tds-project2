@@ -132,18 +132,36 @@ def scrape_quiz_page(url):
         
         # Look for downloadable files
         files = {}
+        # Check <a> tags with href
         for link in soup.find_all('a', href=True):
             href = link['href']
             text = link.get_text(strip=True)
             
             if (link.get('download') or 
                 'download' in text.lower() or 
-                any(href.endswith(ext) for ext in ['.csv', '.xlsx', '.xls', '.pdf', '.txt', '.json'])):
+                any(href.endswith(ext) for ext in ['.csv', '.xlsx', '.xls', '.pdf', '.txt', '.json', '.png', '.jpg', '.gif', '.mp3', '.wav'])):
                 
                 if not href.startswith('http'):
                     href = urljoin(url, href)
                 files[text or 'file'] = href
-                print(f"📎 File found: {text} -> {href}")
+                print(f"📎 File found (link): {text} -> {href}")
+        
+        # Check <img> tags with src
+        for img in soup.find_all('img', src=True):
+            src = img['src']
+            if not src.startswith('http'):
+                src = urljoin(url, src)
+            filename = src.split('/')[-1]
+            files[filename] = src
+            print(f"📎 File found (img): {filename} -> {src}")
+        
+        # Extract file paths from text (e.g., "Open /project2/heatmap.png")
+        import re
+        file_patterns = re.findall(r'/project2/([\w\-\.]+\.(?:png|jpg|jpeg|gif|csv|json|txt|xlsx|pdf|mp3|wav|m4a))', question_text)
+        for filename in file_patterns:
+            file_url = urljoin(url, f'/project2/{filename}')
+            files[filename] = file_url
+            print(f"📎 File found (text): {filename} -> {file_url}")
         
         return {
             'question': question_text,
@@ -154,6 +172,86 @@ def scrape_quiz_page(url):
         print(f"❌ Scraping error: {str(e)}")
         import traceback
         traceback.print_exc()
+        return None
+
+
+def transcribe_audio(audio_url):
+    """Transcribe audio file using Whisper API"""
+    try:
+        print(f"🎧 Transcribing audio with Whisper: {audio_url}")
+        
+        # Download audio
+        response = requests.get(audio_url, timeout=10)
+        response.raise_for_status()
+        
+        # Save to temp file
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp:
+            tmp.write(response.content)
+            audio_file_path = tmp.name
+        
+        # Transcribe with Whisper
+        with open(audio_file_path, 'rb') as audio_file:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file
+            )
+        
+        os.unlink(audio_file_path)
+        answer = transcript.text.strip()
+        print(f"✅ Whisper transcription: {answer}")
+        return answer
+        
+    except Exception as e:
+        print(f"❌ Audio transcription error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def normalize_csv_to_json(csv_text):
+    """Normalize CSV to JSON with exact formatting"""
+    try:
+        df = pd.read_csv(StringIO(csv_text))
+        
+        # Convert column names to snake_case
+        df.columns = [col.lower().replace(' ', '_').replace('-', '_') for col in df.columns]
+        
+        # Sort by first column
+        df = df.sort_values(by=df.columns[0])
+        
+        # Convert to JSON with no spaces after separators
+        result = df.to_json(orient='records', separators=(',', ':'))
+        print(f"📊 CSV normalized to JSON: {len(result)} chars")
+        return result
+        
+    except Exception as e:
+        print(f"❌ CSV normalization error: {str(e)}")
+        return None
+
+
+def count_github_tree_files(tree_json, prefix, extension, email):
+    """Count files in GitHub tree with personalization"""
+    try:
+        import json
+        data = json.loads(tree_json)
+        
+        count = 0
+        for item in data.get('tree', []):
+            path = item.get('path', '')
+            # Check if path starts with prefix and ends with extension
+            if path.startswith(prefix) and path.endswith(extension):
+                count += 1
+        
+        # Add email length mod 2
+        offset = len(email) % 2
+        result = count + offset
+        
+        print(f"🔢 File count: {count}, Email length: {len(email)}, Offset: {offset}, Total: {result}")
+        return result
+        
+    except Exception as e:
+        print(f"❌ GitHub tree count error: {str(e)}")
         return None
 
 
@@ -237,17 +335,29 @@ def download_file(url):
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         
+        # Check if it's an audio file
+        if url.endswith(('.mp3', '.wav', '.m4a', '.ogg')) or 'audio' in response.headers.get('content-type', '').lower():
+            print(f"🎧 Audio file detected: {url}")
+            # Return marker for later processing with Whisper
+            return f"AUDIO:{url}"
+        
         # Check if it's an image file
         if url.endswith(('.png', '.jpg', '.jpeg', '.gif')) or 'image' in response.headers.get('content-type', '').lower():
             print(f"🖼️  Image file detected: {url}")
-            # Return URL for later processing with vision
+            # Return marker for later processing with vision
             return f"IMAGE:{url}"
         
-        # Check if it's a CSV file
+        # Check if it's a CSV file - use for normalization quiz
         if url.endswith('.csv') or 'csv' in response.headers.get('content-type', '').lower():
-            df = pd.read_csv(StringIO(response.text))
-            print(f"✅ CSV loaded: {df.shape[0]} rows, {df.shape[1]} columns")
-            return df.to_string()
+            print(f"📊 CSV file detected for normalization")
+            # Return marker with CSV text for special handling
+            return f"CSV:{response.text}"
+        
+        # Check if it's a JSON file - might need special handling
+        if url.endswith('.json') or 'json' in response.headers.get('content-type', '').lower():
+            print(f"📋 JSON file detected")
+            # Return marker with JSON text for special handling  
+            return f"JSON:{response.text}"
         
         # Check if it's Excel
         elif url.endswith(('.xlsx', '.xls')):
@@ -441,6 +551,18 @@ def parse_answer(answer_text):
     """Parse answer to appropriate type (boolean, number, string)"""
     answer = answer_text.strip()
     
+    # Try to unwrap JSON if GPT returns {"answer": "...", "url": "..."} format
+    if answer.startswith('{') and answer.endswith('}'):
+        try:
+            import json
+            data = json.loads(answer)
+            # Extract the actual answer from JSON
+            if 'answer' in data:
+                answer = data['answer']
+                print(f"🔓 Unwrapped JSON answer: {answer}")
+        except:
+            pass  # Not valid JSON, continue with original
+    
     # Try boolean
     if answer.lower() in ['true', 'yes']:
         return True
@@ -569,28 +691,67 @@ def handle_quiz():
             question = quiz_data['question']
             print(f"❓ Question: {question[:150]}...")
             
-            # Step 2: Download files
+            # Step 2: Download files and detect special types
             data_context = None
             image_url = None
+            audio_url = None
+            csv_text = None
+            json_text = None
+            
             if quiz_data['files']:
                 for file_name, file_url in quiz_data['files'].items():
                     file_data = download_file(file_url)
                     if file_data:
-                        # Check if it's an image
-                        if isinstance(file_data, str) and file_data.startswith('IMAGE:'):
-                            image_url = file_data[6:]  # Remove 'IMAGE:' prefix
-                            print(f"🖼️  Image file will be analyzed with Vision API")
+                        # Check file type markers
+                        if isinstance(file_data, str):
+                            if file_data.startswith('AUDIO:'):
+                                audio_url = file_data[6:]  # Remove 'AUDIO:' prefix
+                                print(f"🎧 Audio file will be transcribed with Whisper")
+                            elif file_data.startswith('IMAGE:'):
+                                image_url = file_data[6:]  # Remove 'IMAGE:' prefix
+                                print(f"🖼️  Image file will be analyzed with Vision API")
+                            elif file_data.startswith('CSV:'):
+                                csv_text = file_data[4:]  # Remove 'CSV:' prefix
+                                print(f"📊 CSV file will be normalized to JSON")
+                            elif file_data.startswith('JSON:'):
+                                json_text = file_data[5:]  # Remove 'JSON:' prefix
+                                print(f"📋 JSON file loaded for processing")
+                            else:
+                                data_context = file_data
                         else:
                             data_context = file_data
                         break
             
-            # Step 3: Solve
-            if image_url:
-                # Use Vision API for images
+            # Step 3: Solve with appropriate method
+            answer = None
+            
+            # Audio transcription
+            if audio_url:
+                answer = transcribe_audio(audio_url)
+            
+            # Image analysis
+            elif image_url:
                 answer = analyze_image_with_gpt(image_url, question)
+            
+            # CSV normalization
+            elif csv_text and ('normalize' in question.lower() or 'json' in question.lower()):
+                answer = normalize_csv_to_json(csv_text)
+            
+            # GitHub tree counting
+            elif json_text and 'gh-tree' in question.lower() and 'count' in question.lower():
+                # Extract parameters from question
+                import re
+                # Find prefix like "docs/guide" or similar
+                prefix_match = re.search(r'prefix[:\s]+["\']?([a-zA-Z0-9/_\-]+)["\']?', question)
+                prefix = prefix_match.group(1) if prefix_match else ""
+                # Find extension like ".md"
+                ext_match = re.search(r'\.(\w+)\s+files?', question)
+                extension = f".{ext_match.group(1)}" if ext_match else ".md"
+                answer = count_github_tree_files(json_text, prefix, extension, YOUR_EMAIL)
+            
+            # Regular GPT solving
             else:
-                # Use regular GPT for text
-                answer = solve_with_gpt(question, data_context, quiz_url=current_url)
+                answer = solve_with_gpt(question, data_context or json_text, quiz_url=current_url)
             
             if answer is None:
                 print("❌ Failed to solve, moving on")
