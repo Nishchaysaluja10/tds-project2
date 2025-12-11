@@ -736,35 +736,23 @@ def handle_quiz():
             
             # Logs.zip processing (Q9)
             elif 'logs' in question.lower() and 'download' in question.lower() and 'bytes' in question.lower():
-                # Download and process logs.zip
+                # Construct logs.zip URL directly
+                logs_url = 'https://tds-llm-analysis.s-anand.net/project2/logs.zip'
+                print(f"📦 Downloading logs.zip from: {logs_url}")
                 import requests
-                logs_url = None
-                for filename, file_url in files.items():
-                    if filename.endswith('.zip') and 'logs' in filename.lower():
-                        logs_url = file_url
-                        break
-                
-                if logs_url:
-                    print(f"📦 Downloading logs.zip from: {logs_url}")
-                    response = requests.get(logs_url, timeout=10)
-                    response.raise_for_status()
-                    answer = process_logs_zip(response.content, YOUR_EMAIL)
+                response = requests.get(logs_url, timeout=10)
+                response.raise_for_status()
+                answer = process_logs_zip(response.content, YOUR_EMAIL)
             
             # Invoice.pdf processing (Q10)
             elif 'invoice' in question.lower() and ('quantity' in question.lower() or 'unitprice' in question.lower()):
-                # Download and process invoice.pdf
+                # Construct invoice.pdf URL directly
+                invoice_url = 'https://tds-llm-analysis.s-anand.net/project2/invoice.pdf'
+                print(f"📄 Downloading invoice.pdf from: {invoice_url}")
                 import requests
-                invoice_url = None
-                for filename, file_url in files.items():
-                    if filename.endswith('.pdf') and 'invoice' in filename.lower():
-                        invoice_url = file_url
-                        break
-                
-                if invoice_url:
-                    print(f"📄 Downloading invoice.pdf from: {invoice_url}")
-                    response = requests.get(invoice_url, timeout=10)
-                    response.raise_for_status()
-                    answer = process_invoice_pdf(response.content)
+                response = requests.get(invoice_url, timeout=10)
+                response.raise_for_status()
+                answer = process_invoice_pdf(response.content)
             
             # GitHub tree counting
             elif json_text and 'gh-tree' in question.lower() and 'count' in question.lower():
