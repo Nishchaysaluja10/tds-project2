@@ -157,8 +157,8 @@ def scrape_quiz_page(url):
         
         # Extract file paths from text (e.g., "Open /project2/heatmap.png" or "Listen to /project2/audio-passphrase.mp3")
         import re
-        # More permissive pattern to catch audio files with dashes
-        file_patterns = re.findall(r'/project2/([\w\-\.]+\.(?:png|jpg|jpeg|gif|csv|json|txt|xlsx|pdf|mp3|wav|m4a))', question_text)
+        # More permissive pattern to catch audio files with dashes and .opus extension
+        file_patterns = re.findall(r'/project2/([\w\-\.]+\.(?:png|jpg|jpeg|gif|csv|json|txt|xlsx|pdf|mp3|wav|m4a|opus))', question_text)
         for filename in file_patterns:
             file_url = urljoin(url, f'/project2/{filename}')
             files[filename] = file_url
@@ -222,6 +222,11 @@ def normalize_csv_to_json(csv_text):
         # Convert column names to snake_case
         df.columns = [col.lower().replace(' ', '_').replace('-', '_') for col in df.columns]
         
+        # Strip whitespace from all string columns
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                df[col] = df[col].str.strip()
+        
         # Normalize date columns - detect and convert to YYYY-MM-DD format
         for col in df.columns:
             if 'date' in col.lower() or 'joined' in col.lower():
@@ -231,13 +236,22 @@ def normalize_csv_to_json(csv_text):
                 except:
                     pass  # If conversion fails, leave as-is
         
-        # Sort by first column
+        # Convert numeric columns to proper types
+        for col in df.columns:
+            if col in ['id', 'value'] or col.endswith('_id'):
+                try:
+                    df[col] = pd.to_numeric(df[col])
+                except:
+                    pass
+        
+        # Sort by first column (should be 'id')
         df = df.sort_values(by=df.columns[0])
         
         # Convert to dict then JSON with no spaces
         records = df.to_dict(orient='records')
         result = json.dumps(records, separators=(',', ':'))
         print(f"📊 CSV normalized to JSON: {len(result)} chars")
+        print(f"📊 First record: {records[0] if records else 'empty'}")
         return result
         
     except Exception as e:
@@ -259,6 +273,7 @@ def count_github_tree_files(tree_json, prefix, extension, email):
             # Check if path starts with prefix and ends with extension
             if path.startswith(prefix) and path.endswith(extension):
                 count += 1
+                print(f"  Found: {path}")
         
         # Add email length mod 2
         offset = len(email) % 2
@@ -269,6 +284,8 @@ def count_github_tree_files(tree_json, prefix, extension, email):
         
     except Exception as e:
         print(f"❌ GitHub tree count error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -296,18 +313,13 @@ def analyze_image_with_gpt(image_url, question):
             mime_type = 'image/png'  # default
         
         # Call GPT-4 Vision
-        vision_prompt = f"""Analyze this heatmap image and determine the most frequent (dominant) color.
+        vision_prompt = f"""Analyze this heatmap image.
 
 Question: {question}
 
-Instructions:
-- Analyze ALL pixels in the image
-- Find the color that appears MOST FREQUENTLY (not brightest or darkest)
-- Return ONLY the hex code in lowercase #rrggbb format
-- Be PRECISE with the hex values (no rounding)
-- For heatmaps, look at the warm/orange tones that dominate
+Return ONLY the hex code of the most frequent color in lowercase #rrggbb format. No explanations.
 
-Answer (hex code only):"""
+Hex code:"""
         
         response = client.chat.completions.create(
             model="gpt-4o",  # GPT-4o has vision capabilities
@@ -332,9 +344,12 @@ Answer (hex code only):"""
         answer = response.choices[0].message.content.strip()
         print(f"✅ GPT-4 Vision answer: {answer}")
         
-        # Clean up answer
-        answer = answer.replace('Answer:', '').strip()
-        answer = answer.replace('The answer is', '').strip()
+        # Parse hex code from response (might have explanation before it)
+        import re
+        hex_match = re.search(r'#[0-9a-fA-F]{6}', answer)
+        if hex_match:
+            answer = hex_match.group(0).lower()
+            print(f"🎨 Extracted hex code: {answer}")
         
         return answer
         
@@ -354,7 +369,7 @@ def download_file(url):
         response.raise_for_status()
         
         # Check if it's an audio file
-        if url.endswith(('.mp3', '.wav', '.m4a', '.ogg')) or 'audio' in response.headers.get('content-type', '').lower():
+        if url.endswith(('.mp3', '.wav', '.m4a', '.ogg', '.opus')) or 'audio' in response.headers.get('content-type', '').lower():
             print(f"🎧 Audio file detected: {url}")
             # Return marker for later processing with Whisper
             return f"AUDIO:{url}"
@@ -757,46 +772,36 @@ def handle_quiz():
             
             # GitHub tree counting
             elif json_text and 'gh-tree' in question.lower() and 'count' in question.lower():
-                # Extract parameters from question with better patterns
-                import re
-                
-                # Look for the full question to find prefix
-                # Pattern: "Use the GitHub tree API...prefix docs/guide" or similar
-                prefix_patterns = [
-                    r'prefix[:\s]+["\']?([a-zA-Z0-9/_\-\.]+)["\']?',  # explicit prefix keyword
-                    r'under[:\s]+["\']?([a-zA-Z0-9/_\-\.]+)["\']?',   # "under docs/"
-                    r'in[:\s]+["\']?([a-zA-Z0-9/_\-\.]+)["\']?',      # "in src/"
-                ]
-                
-                prefix = ""
-                for pattern in prefix_patterns:
-                    match = re.search(pattern, question)
-                    if match:
-                        prefix = match.group(1)
-                        if not prefix.endswith('/'):
-                            # Don't add trailing slash, just use as-is
-                            pass
-                        break
-                
-                # Find extension like ".md" or "md files"
-                ext_patterns = [
-                    r'\.([a-zA-Z0-9]+)\s+files?',  # ".md files"
-                    r'([a-zA-Z0-9]+)\s+files?',     # "md files" 
-                ]
-                
-                extension = ".md"  # default
-                for pattern in ext_patterns:
-                    match = re.search(pattern, question)
-                    if match:
-                        ext = match.group(1)
-                        if not ext.startswith('.'):
-                            extension = f".{ext}"
-                        else:
-                            extension = ext
-                        break
-                
-                print(f"🔍 Extracted - Prefix: '{prefix}', Extension: '{extension}'")
-                answer = count_github_tree_files(json_text, prefix, extension, YOUR_EMAIL)
+                # The gh-tree.json file contains pathPrefix and extension fields!
+                # Parse those from the JSON instead of the question
+                import json
+                try:
+                    params = json.loads(json_text)
+                    prefix = params.get('pathPrefix', '')
+                    extension = params.get('extension', '.md')
+                    
+                    print(f"🔍 Read from JSON - Prefix: '{prefix}', Extension: '{extension}'")
+                    
+                    # Now fetch the actual tree data
+                    owner = params.get('owner', '')
+                    repo = params.get('repo', '')
+                    sha = params.get('sha', '')
+                    
+                    if owner and repo and sha:
+                        tree_url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{sha}?recursive=1"
+                        print(f"🌳 Fetching GitHub tree: {tree_url[:80]}...")
+                        import requests
+                        tree_response = requests.get(tree_url, timeout=10)
+                        tree_data = tree_response.text
+                        answer = count_github_tree_files(tree_data, prefix, extension, YOUR_EMAIL)
+                    else:
+                        print("❌ Missing GitHub API params")
+                        answer = None
+                except Exception as e:
+                    print(f"❌ GitHub tree parsing error: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    answer = None
             
             # Regular GPT solving
             else:
