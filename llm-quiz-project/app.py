@@ -116,6 +116,7 @@ def scrape_quiz_page(url):
                         if question_text:
                             break
         
+        
         if not question_text:
             # Try alternative selectors
             print("⚠️ No #result div, trying alternatives")
@@ -131,14 +132,24 @@ def scrape_quiz_page(url):
                         print(f"✅ Question found in {selector}: {len(text)} chars")
                         break
         
-
+        # FINAL FALLBACK: If no specific tags found, extract from root
+        if not question_text:
+            print("⚠️ No standard tags found, extracting from root HTML")
+            # Remove unwanted tags globally
+            for tag in soup(['script', 'style', 'nav', 'footer', 'header']):
+                tag.decompose()
+            # Get text directly from soup
+            text = soup.get_text(separator='\n', strip=True)
+            if text:
+                question_text = text
+                print(f"✅ Question extracted from root: {len(text)} chars")
         
         # Only return None if we truly have no content at all
         if not question_text:
             print("❌ No content found")
             return None
         
-        print(f"✅ Extracted content ({len(question_text)} chars) [v2-fixed]")
+        print(f"✅ Extracted content ({len(question_text)} chars) [v4.0-fixed]")
         
         # Look for submit URL in the page
         global SUBMIT_ENDPOINT
