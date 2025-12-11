@@ -242,8 +242,8 @@ def normalize_csv_to_json(csv_text):
                 except:
                     pass
         
-        # DON'T SORT - keep original CSV row order!
-        # The question says "sorted by id" but that might be wrong
+        # Sort by id ascending (as question states)
+        df = df.sort_values(by='id')
         
         # Convert to dict then JSON with no spaces
         records = df.to_dict(orient='records')
@@ -734,6 +734,38 @@ def handle_quiz():
             elif csv_text and ('normalize' in question.lower() or 'json' in question.lower()):
                 answer = normalize_csv_to_json(csv_text)
             
+            # Logs.zip processing (Q9)
+            elif 'logs' in question.lower() and 'download' in question.lower() and 'bytes' in question.lower():
+                # Download and process logs.zip
+                import requests
+                logs_url = None
+                for filename, file_url in files.items():
+                    if filename.endswith('.zip') and 'logs' in filename.lower():
+                        logs_url = file_url
+                        break
+                
+                if logs_url:
+                    print(f"📦 Downloading logs.zip from: {logs_url}")
+                    response = requests.get(logs_url, timeout=10)
+                    response.raise_for_status()
+                    answer = process_logs_zip(response.content, YOUR_EMAIL)
+            
+            # Invoice.pdf processing (Q10)
+            elif 'invoice' in question.lower() and ('quantity' in question.lower() or 'unitprice' in question.lower()):
+                # Download and process invoice.pdf
+                import requests
+                invoice_url = None
+                for filename, file_url in files.items():
+                    if filename.endswith('.pdf') and 'invoice' in filename.lower():
+                        invoice_url = file_url
+                        break
+                
+                if invoice_url:
+                    print(f"📄 Downloading invoice.pdf from: {invoice_url}")
+                    response = requests.get(invoice_url, timeout=10)
+                    response.raise_for_status()
+                    answer = process_invoice_pdf(response.content)
+            
             # GitHub tree counting
             elif json_text and 'gh-tree' in question.lower() and 'count' in question.lower():
                 # The gh-tree.json file contains pathPrefix and extension fields!
@@ -838,4 +870,87 @@ if __name__ == '__main__':
     print(f"🌐 Server: http://localhost:5000")
     print("="*60 + "\n")
     
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5000)def process_logs_zip(zip_content, email):
+    """Process logs.zip and sum download bytes with offset"""
+    try:
+        import zipfile
+        from io import BytesIO
+        import json
+        
+        # Extract ZIP content
+        zip_file = zipfile.ZipFile(BytesIO(zip_content))
+        
+        # Read logs.jsonl
+        logs_data = zip_file.read('logs.jsonl').decode('utf-8')
+        
+        # Sum bytes where event=="download"
+        total_bytes = 0
+        for line in logs_data.strip().split('\n'):
+            entry = json.loads(line)
+            if entry.get('event') == 'download':
+                total_bytes += entry.get('bytes', 0)
+        
+        # Add offset (email length mod 5)
+        offset = len(email) % 5
+        result = total_bytes + offset
+        
+        print(f"📊 Logs processing:")
+        print(f"  Download bytes sum: {total_bytes}")
+        print(f"  Email length: {len(email)}, Offset (mod 5): {offset}")
+        print(f"  Final answer: {result}")
+        
+        return result
+        
+    except Exception as e:
+        print(f"❌ Logs processing error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def process_invoice_pdf(pdf_content):
+    """Process invoice.pdf and calculate sum(Quantity * UnitPrice)"""
+    try:
+        from PyPDF2 import PdfReader
+        from io import BytesIO
+        import re
+        
+        # Read PDF
+        pdf = PdfReader(BytesIO(pdf_content))
+        text = ""
+        for page in pdf.pages:
+            text += page.extract_text()
+        
+        print(f"📄 PDF text extracted:\n{text[:500]}...")
+        
+        # Parse line items - look for patterns like "Quantity: X UnitPrice: Y" or table format
+        # This is a simplified parser - might need adjustment based on actual PDF structure
+        total = 0.0
+        
+        # Try to find quantity and price patterns
+        # Common patterns: "Qty: 5  Price: 10.50" or table rows
+        lines = text.split('\n')
+        for line in lines:
+            # Look for numbers that might be quantity and price
+            numbers = re.findall(r'\d+\.?\d*', line)
+            if len(numbers) >= 2 and ('qty' in line.lower() or 'quantity' in line.lower() or 'price' in line.lower()):
+                try:
+                    qty = float(numbers[0])
+                    price = float(numbers[1])
+                    line_total = qty * price
+                    total += line_total
+                    print(f"  Line item: {qty} × {price} = {line_total}")
+                except:
+                    pass
+        
+        # Round to 2 decimals
+        result = round(total, 2)
+        print(f"💰 Invoice total: {result}")
+        
+        return result
+        
+    except Exception as e:
+        print(f"❌ Invoice processing error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
