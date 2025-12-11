@@ -756,8 +756,12 @@ def handle_quiz():
                         print(f"🌳 Fetching GitHub tree: {tree_url[:80]}...")
                         import requests
                         tree_response = requests.get(tree_url, timeout=10)
-                        tree_data = tree_response.text
-                        answer = count_github_tree_files(tree_data, prefix, extension, YOUR_EMAIL)
+                        tree_response.raise_for_status()
+                        tree_data = tree_response.json()  # Parse as JSON, not text!
+                        # Convert back to JSON string for count_github_tree_files
+                        import json
+                        tree_data_str = json.dumps(tree_data)
+                        answer = count_github_tree_files(tree_data_str, prefix, extension, YOUR_EMAIL)
                     else:
                         print("❌ Missing GitHub API params")
                         answer = None
