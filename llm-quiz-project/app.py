@@ -157,12 +157,91 @@ def scrape_quiz_page(url):
         return None
 
 
-def download_file(url):
-    """Download file and return content as string"""
+def analyze_image_with_gpt(image_url, question):
+    """Analyze an image using GPT-4 Vision"""
     try:
-        print(f"Downloading file: {url}")
-        response = requests.get(url, timeout=15)
+        print(f"🖼️  Analyzing image with GPT-4 Vision: {image_url}")
+        
+        # Download image
+        response = requests.get(image_url, timeout=10)
         response.raise_for_status()
+        
+        # Encode to base64
+        import base64
+        base64_image = base64.b64encode(response.content).decode('utf-8')
+        
+        # Determine image type
+        if image_url.endswith('.png'):
+            mime_type = 'image/png'
+        elif image_url.endswith(('.jpg', '.jpeg')):
+            mime_type = 'image/jpeg'
+        elif image_url.endswith('.gif'):
+            mime_type = 'image/gif'
+        else:
+            mime_type = 'image/png'  # default
+        
+        # Call GPT-4 Vision
+        vision_prompt = f"""Analyze this image and answer the question.
+
+Question: {question}
+
+Provide ONLY the final answer. Be precise and exact.
+
+For color questions:
+- Return the hex code in lowercase format: #rrggbb
+- For "dominant color" or "most frequent color", analyze the pixel colors
+
+Answer:"""
+        
+        response = client.chat.completions.create(
+            model="gpt-4o",  # GPT-4o has vision capabilities
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": vision_prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            temperature=0,
+            max_tokens=500
+        )
+        
+        answer = response.choices[0].message.content.strip()
+        print(f"✅ GPT-4 Vision answer: {answer}")
+        
+        # Clean up answer
+        answer = answer.replace('Answer:', '').strip()
+        answer = answer.replace('The answer is', '').strip()
+        
+        return answer
+        
+    except Exception as e:
+        print(f"❌ Image analysis error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def download_file(url):
+    """Download a file and process it based on type"""
+    print(f"Downloading file: {url}")
+    
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        
+        # Check if it's an image file
+        if url.endswith(('.png', '.jpg', '.jpeg', '.gif')) or 'image' in response.headers.get('content-type', '').lower():
+            print(f"🖼️  Image file detected: {url}")
+            # Return URL for later processing with vision
+            return f"IMAGE:{url}"
         
         # Check if it's a CSV file
         if url.endswith('.csv') or 'csv' in response.headers.get('content-type', '').lower():
@@ -263,8 +342,8 @@ def download_file(url):
         return None
 
 
-def solve_with_gpt(question, data_context=None):
-    """Use GPT to solve the question"""
+def solve_with_gpt(question, data_context=None, quiz_url=None):
+    """Use GPT to solve the question with enhanced context"""
     try:
         # Build the prompt
         prompt = f"""You are solving a data analysis quiz question. 
@@ -279,11 +358,38 @@ Question: {question}
             else:
                 prompt += f"\n\nData provided:\n{data_context}\n"
         
+        # Add context hints based on question type
+        prompt += "\n"
+        
+        # URL/Command context
+        if any(keyword in question.lower() for keyword in ["http get", "curl", "command string", "uv http"]):
+            prompt += "IMPORTANT: When constructing URLs, use ABSOLUTE URLs starting with https://tds-llm-analysis.s-anand.net (not relative paths).\n"
+        
+        # JSON formatting context
+        if "json" in question.lower():
+            if "normalize" in question.lower() or "snake_case" in question.lower():
+                prompt += "IMPORTANT: Return ONLY valid JSON array. Convert ALL column names to snake_case (lowercase with underscores). Sort data as specified. No markdown code blocks.\n"
+            else:
+                prompt += "IMPORTANT: Return ONLY valid JSON. No markdown code blocks, no backticks, no explanations.\n"
+        
+        # Email length context for personalized quizzes
+        if "email" in question.lower() and ("length" in question.lower() or "mod" in question.lower()):
+            email = YOUR_EMAIL
+            prompt += f"Your email address: {email}\n"
+            prompt += f"Email length: {len(email)}\n"
+            prompt += "Show calculation: count the items first, then add (email_length mod 2).\n"
+        
+        # Color/hex code context
+        if "color" in question.lower() or "hex" in question.lower() or "heatmap" in question.lower():
+            prompt += "IMPORTANT: Return color as lowercase hex code (#rrggbb format).\n"
+        
         prompt += """
 Important instructions:
 - Provide ONLY the final answer
 - If it's a number, give just the number (no units, no commas, no formatting)
-- If it's a yes/no question, answer with just "yes" or "no" (or true/false)
+- If it's a command, provide ONLY the command string (no explanations)
+- If it's JSON, provide ONLY the JSON (no markdown, no backticks)
+- If it's a yes/no question, answer with just "yes" or "no"
 - If it's a calculation, show only the result
 - No explanations or reasoning
 - Be precise and exact
@@ -306,7 +412,7 @@ Answer:"""
                 }
             ],
             temperature=0,
-            max_tokens=500
+            max_tokens=1000
         )
         
         answer = response.choices[0].message.content.strip()
@@ -316,6 +422,11 @@ Answer:"""
         answer = answer.replace('Answer:', '').strip()
         answer = answer.replace('The answer is', '').strip()
         answer = answer.replace('The result is', '').strip()
+        
+        # Remove markdown code blocks
+        import re
+        answer = re.sub(r'```\w*\n?', '', answer).strip()
+        answer = re.sub(r'```$', '', answer).strip()
         
         return parse_answer(answer)
             
@@ -460,14 +571,27 @@ def handle_quiz():
             
             # Step 2: Download files
             data_context = None
+            image_url = None
             if quiz_data['files']:
                 for file_name, file_url in quiz_data['files'].items():
-                    data_context = download_file(file_url)
-                    if data_context:
+                    file_data = download_file(file_url)
+                    if file_data:
+                        # Check if it's an image
+                        if isinstance(file_data, str) and file_data.startswith('IMAGE:'):
+                            image_url = file_data[6:]  # Remove 'IMAGE:' prefix
+                            print(f"🖼️  Image file will be analyzed with Vision API")
+                        else:
+                            data_context = file_data
                         break
             
             # Step 3: Solve
-            answer = solve_with_gpt(question, data_context)
+            if image_url:
+                # Use Vision API for images
+                answer = analyze_image_with_gpt(image_url, question)
+            else:
+                # Use regular GPT for text
+                answer = solve_with_gpt(question, data_context, quiz_url=current_url)
+            
             if answer is None:
                 print("❌ Failed to solve, moving on")
                 break
