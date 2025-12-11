@@ -245,11 +245,11 @@ def normalize_csv_to_json(csv_text):
         # Sort by id ascending (as question states)
         df = df.sort_values(by='id')
         
-        # Convert to dict then JSON with no spaces
+        # Convert to dict then JSON with standard formatting (spaces)
         records = df.to_dict(orient='records')
-        result = json.dumps(records, separators=(',', ':'))
-        print(f"📊 CSV normalized to JSON: {len(result)} chars")
-        print(f"📊 First record: {records[0] if records else 'empty'}")
+        result = json.dumps(records) # Default separators adds spaces
+        # print(f"📊 CSV normalized to JSON: {len(result)} chars")
+        # print(f"📊 First record: {records[0] if records else 'empty'}")
         return result
         
     except Exception as e:
@@ -914,26 +914,43 @@ def process_invoice_pdf(pdf_content):
         
         print(f"📄 PDF text extracted:\n{text[:500]}...")
         
-        # Parse line items - look for patterns like "Quantity: X UnitPrice: Y" or table format
-        # This is a simplified parser - might need adjustment based on actual PDF structure
+        # Parse line items - based on logs, format is vertical:
+        # Item Name
+        # Quantity
+        # UnitPrice
+        
+        lines = text.split('\n')
         total = 0.0
         
-        # Try to find quantity and price patterns
-        # Common patterns: "Qty: 5  Price: 10.50" or table rows
-        lines = text.split('\n')
+        # Strategy: Look for pattern of Int followed by Float/Int
+        # Collect all numeric values in order
+        numbers = []
         for line in lines:
-            # Look for numbers that might be quantity and price
-            numbers = re.findall(r'\d+\.?\d*', line)
-            if len(numbers) >= 2 and ('qty' in line.lower() or 'quantity' in line.lower() or 'price' in line.lower()):
-                try:
-                    qty = float(numbers[0])
-                    price = float(numbers[1])
-                    line_total = qty * price
-                    total += line_total
-                    print(f"  Line item: {qty} × {price} = {line_total}")
-                except:
-                    pass
+            # Check if line is a number
+            clean_line = line.strip()
+            # Regex for number (int or float)
+            if re.match(r'^\d+(\.\d+)?$', clean_line):
+                numbers.append(float(clean_line))
         
+        print(f"  Found {len(numbers)} numbers: {numbers}")
+        
+        # Process pairs. In the sample: 3, 19.99, 2, 5.5, 1, 100.0
+        # It seems numbers appear in Qty, Price pairs
+        # But verify no other numbers interfere (like IDs)
+        # Based on logs, it was just Item, Qty, Price. Item names are strings.
+        
+        if len(numbers) >= 2:
+            # We assume even number of numeric values, representing (Qty, Price) parsing
+            # Or if odd, the first might be something else? 
+            # Let's iterate and try to find logical pairs
+            for i in range(0, len(numbers) - 1, 2):
+                qty = numbers[i]
+                price = numbers[i+1]
+                # Qty is usually an integer-like value
+                line_total = qty * price
+                total += line_total
+                print(f"  Line item: {qty} * {price} = {line_total}")
+                
         # Round to 2 decimals
         result = round(total, 2)
         print(f"💰 Invoice total: {result}")
