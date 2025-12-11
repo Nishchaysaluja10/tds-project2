@@ -213,19 +213,29 @@ def transcribe_audio(audio_url):
 def normalize_csv_to_json(csv_text):
     """Normalize CSV to JSON with exact formatting"""
     try:
+        import json
+        import pandas as pd
+        from io import StringIO
+        
         df = pd.read_csv(StringIO(csv_text))
         
         # Convert column names to snake_case
         df.columns = [col.lower().replace(' ', '_').replace('-', '_') for col in df.columns]
         
+        # Normalize date columns - detect and convert to YYYY-MM-DD format
+        for col in df.columns:
+            if 'date' in col.lower() or 'joined' in col.lower():
+                try:
+                    # Try to parse dates with pandas and convert to ISO format
+                    df[col] = pd.to_datetime(df[col], infer_datetime_format=True).dt.strftime('%Y-%m-%d')
+                except:
+                    pass  # If conversion fails, leave as-is
+        
         # Sort by first column
         df = df.sort_values(by=df.columns[0])
         
-        # Convert to JSON - pandas to_json doesn't support separators parameter
-        # Use orient='records' which gives [{...},{...}] format
-        import json
+        # Convert to dict then JSON with no spaces
         records = df.to_dict(orient='records')
-        # Manually format JSON with no spaces
         result = json.dumps(records, separators=(',', ':'))
         print(f"📊 CSV normalized to JSON: {len(result)} chars")
         return result
@@ -286,17 +296,18 @@ def analyze_image_with_gpt(image_url, question):
             mime_type = 'image/png'  # default
         
         # Call GPT-4 Vision
-        vision_prompt = f"""Analyze this image and answer the question.
+        vision_prompt = f"""Analyze this heatmap image and determine the most frequent (dominant) color.
 
 Question: {question}
 
-Provide ONLY the final answer. Be precise and exact.
+Instructions:
+- Analyze ALL pixels in the image
+- Find the color that appears MOST FREQUENTLY (not brightest or darkest)
+- Return ONLY the hex code in lowercase #rrggbb format
+- Be PRECISE with the hex values (no rounding)
+- For heatmaps, look at the warm/orange tones that dominate
 
-For color questions:
-- Return the hex code in lowercase format: #rrggbb
-- For "dominant color" or "most frequent color", analyze the pixel colors
-
-Answer:"""
+Answer (hex code only):"""
         
         response = client.chat.completions.create(
             model="gpt-4o",  # GPT-4o has vision capabilities
@@ -696,7 +707,7 @@ def handle_quiz():
                 break
             
             question = quiz_data['question']
-            print(f"❓ Question: {question[:150]}...")
+            print(f"❓ Question: {question[:250]}...")  # Show more text to see full filenames
             
             # Step 2: Download files and detect special types
             data_context = None
@@ -746,14 +757,45 @@ def handle_quiz():
             
             # GitHub tree counting
             elif json_text and 'gh-tree' in question.lower() and 'count' in question.lower():
-                # Extract parameters from question
+                # Extract parameters from question with better patterns
                 import re
-                # Find prefix like "docs/guide" or similar
-                prefix_match = re.search(r'prefix[:\s]+["\']?([a-zA-Z0-9/_\-]+)["\']?', question)
-                prefix = prefix_match.group(1) if prefix_match else ""
-                # Find extension like ".md"
-                ext_match = re.search(r'\.(\w+)\s+files?', question)
-                extension = f".{ext_match.group(1)}" if ext_match else ".md"
+                
+                # Look for the full question to find prefix
+                # Pattern: "Use the GitHub tree API...prefix docs/guide" or similar
+                prefix_patterns = [
+                    r'prefix[:\s]+["\']?([a-zA-Z0-9/_\-\.]+)["\']?',  # explicit prefix keyword
+                    r'under[:\s]+["\']?([a-zA-Z0-9/_\-\.]+)["\']?',   # "under docs/"
+                    r'in[:\s]+["\']?([a-zA-Z0-9/_\-\.]+)["\']?',      # "in src/"
+                ]
+                
+                prefix = ""
+                for pattern in prefix_patterns:
+                    match = re.search(pattern, question)
+                    if match:
+                        prefix = match.group(1)
+                        if not prefix.endswith('/'):
+                            # Don't add trailing slash, just use as-is
+                            pass
+                        break
+                
+                # Find extension like ".md" or "md files"
+                ext_patterns = [
+                    r'\.([a-zA-Z0-9]+)\s+files?',  # ".md files"
+                    r'([a-zA-Z0-9]+)\s+files?',     # "md files" 
+                ]
+                
+                extension = ".md"  # default
+                for pattern in ext_patterns:
+                    match = re.search(pattern, question)
+                    if match:
+                        ext = match.group(1)
+                        if not ext.startswith('.'):
+                            extension = f".{ext}"
+                        else:
+                            extension = ext
+                        break
+                
+                print(f"🔍 Extracted - Prefix: '{prefix}', Extension: '{extension}'")
                 answer = count_github_tree_files(json_text, prefix, extension, YOUR_EMAIL)
             
             # Regular GPT solving
