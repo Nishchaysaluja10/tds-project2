@@ -730,8 +730,18 @@ def handle_quiz():
             elif image_url:
                 answer = analyze_image_with_gpt(image_url, question)
             
+            print(f"DEBUG: Question text: {question}")
+            
             # Orders CSV processing (Q11)
-            elif 'orders' in question.lower() and 'total' in question.lower() and 'customer' in question.lower():
+            # Robust check: look for orders.csv in the file list or question text
+            is_orders_quiz = 'orders' in question.lower()
+            if not is_orders_quiz and quiz_data.get('files'):
+                for furl in quiz_data['files'].values():
+                    if 'orders.csv' in furl:
+                        is_orders_quiz = True
+                        break
+            
+            if is_orders_quiz and 'total' in question.lower():
                 # Download and process orders.csv
                 orders_url = 'https://tds-llm-analysis.s-anand.net/project2/orders.csv'
                 print(f"📊 Downloading orders.csv from: {orders_url}")
