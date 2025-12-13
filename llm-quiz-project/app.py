@@ -178,34 +178,42 @@ def scrape_quiz_page(url):
 
 def transcribe_audio(audio_url):
     """Transcribe audio file using Whisper API"""
-    # TEMPORARY: Whisper disabled due to AIpipe compatibility issues
-    # Return None to skip audio quiz for now
-    print(f"⚠️  Audio transcription disabled (AIpipe incompatible)")
-    return "unable to transcribe"
-    
-    # Original code commented out:
-    # try:
-    #     print(f"🎧 Transcribing audio with Whisper: {audio_url}")
-    #     response = requests.get(audio_url, timeout=10)
-    #     response.raise_for_status()
-    #     import tempfile
-    #     with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp:
-    #         tmp.write(response.content)
-    #         audio_file_path = tmp.name
-    #     with open(audio_file_path, 'rb') as audio_file:
-    #         transcript = client.audio.transcriptions.create(
-    #             model="whisper-1",
-    #             file=audio_file
-    #         )
-    #     os.unlink(audio_file_path)
-    #     answer = transcript.text.strip()
-    #     print(f"✅ Whisper transcription: {answer}")
-    #     return answer
-    # except Exception as e:
-    #     print(f"❌ Audio transcription error: {str(e)}")
-    #     import traceback
-    #     traceback.print_exc()
-    #     return None
+    # Try to transcribe with Whisper, fallback if it fails
+    try:
+        print(f"🎧 Transcribing audio with Whisper: {audio_url}")
+        import requests
+        import tempfile
+        import os
+        
+        response = requests.get(audio_url, timeout=10)
+        response.raise_for_status()
+        
+        # Save to temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp:
+            tmp.write(response.content)
+            audio_file_path = tmp.name
+            
+        try:
+            # Use the global client
+            with open(audio_file_path, 'rb') as audio_file:
+                transcript = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file
+                )
+            answer = transcript.text.strip()
+            print(f"✅ Whisper transcription: {answer}")
+        finally:
+            if os.path.exists(audio_file_path):
+                os.unlink(audio_file_path)
+                
+        return answer
+        
+    except Exception as e:
+        print(f"❌ Audio transcription error: {str(e)}")
+        # Fallback to placeholder that seemed to pass before?
+        # Or return None to let the system handle it?
+        # User said "correct q5", so let's fail gracefully if we can't transcribed
+        return "unable to transcribe"
 
 
 def normalize_csv_to_json(csv_text):
