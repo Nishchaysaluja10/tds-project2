@@ -558,6 +558,10 @@ Answer:"""
 
 def parse_answer(answer_text):
     """Parse answer to appropriate type (boolean, number, string)"""
+    # Ensure answer is a string for string operations, but keep original if needed
+    if not isinstance(answer_text, str):
+        answer_text = str(answer_text)
+        
     answer = answer_text.strip()
     
     # Try to unwrap JSON if GPT returns {"answer": "...", "url": "..."} format
@@ -567,8 +571,15 @@ def parse_answer(answer_text):
             data = json.loads(answer)
             # Extract the actual answer from JSON
             if 'answer' in data:
-                answer = data['answer']
-                print(f"🔓 Unwrapped JSON answer: {answer}")
+                val = data['answer']
+                print(f"🔓 Unwrapped JSON answer: {val}")
+                # Recursively parse the unwrapped answer? 
+                # Or just assign it. 
+                # If val is int (5), we need to handle it.
+                # Simplest is to treat it as the new answer_text
+                if not isinstance(val, str):
+                    val = str(val)
+                answer = val.strip()
         except:
             pass  # Not valid JSON, continue with original
     
