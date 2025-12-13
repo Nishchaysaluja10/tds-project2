@@ -6,15 +6,17 @@ import re
 from dotenv import load_dotenv
 import os
 
-load_dotenv()
-client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-
 def process_table_quiz(html_content, question):
     """
     Extracts table from HTML.
     Uses GPT to determine which column to aggregate and how (SUM/COUNT/MEAN).
     Performs aggregation using Pandas.
     """
+    client = openai.OpenAI(
+        api_key=os.environ.get("AIPIPE_API_KEY"),
+        base_url="https://aipipe.org/openai/v1"
+    )
+
     try:
         # Use lxml flavor if installed, else default
         try:

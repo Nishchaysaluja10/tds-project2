@@ -4,9 +4,6 @@ import openai
 from dotenv import load_dotenv
 import os
 
-load_dotenv()
-client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-
 def process_sqlite_quiz(sql_file_content, question):
     """
     1. Create in-memory DB.
@@ -14,6 +11,11 @@ def process_sqlite_quiz(sql_file_content, question):
     3. Ask GPT to generate SELECT query for 'question'.
     4. Execute query and return result.
     """
+    client = openai.OpenAI(
+        api_key=os.environ.get("AIPIPE_API_KEY"),
+        base_url="https://aipipe.org/openai/v1"
+    )
+
     try:
         # 1. Setup DB
         conn = sqlite3.connect(':memory:')

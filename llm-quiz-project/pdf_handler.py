@@ -5,13 +5,15 @@ from pypdf import PdfReader
 from dotenv import load_dotenv
 import os
 
-load_dotenv()
-client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-
 def process_pdf_quiz(pdf_bytes, question):
     """
     Extract text from PDF and use GPT to answer the question.
     """
+    client = openai.OpenAI(
+        api_key=os.environ.get("AIPIPE_API_KEY"),
+        base_url="https://aipipe.org/openai/v1"
+    )
+    
     try:
         reader = PdfReader(io.BytesIO(pdf_bytes))
         text = ""
