@@ -1003,10 +1003,12 @@ def process_orders_csv(csv_content):
         # about the output format (e.g. time series).
         # But "take the top 3 customers by total" implies we just want the final ranking.
         
+        # Question asks for "customer_id" and "total" (see logs)
         customer_totals = df.groupby('customer_id')['amount'].sum().reset_index()
+        customer_totals.rename(columns={'amount': 'total'}, inplace=True)
         
         # Sort by total descending
-        top_3 = customer_totals.sort_values(by='amount', ascending=False).head(3)
+        top_3 = customer_totals.sort_values(by='total', ascending=False).head(3)
         
         # Convert to simple dictionary list
         # Format: [{"customer_id": "AID", "total": 123}, ...]
