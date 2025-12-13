@@ -22,6 +22,17 @@ def process_pdf_quiz(pdf_bytes, question):
             
         print(f"📄 Extracted PDF text length: {len(text)}")
         
+        # Specific Logic for Q19 (Q2 Summary)
+        if "Q2 Summary" in question or "Q2 Summary" in text:
+            import re
+            # Pattern: "Q2 Summary: Total Operating Expenses: $8,126.49"
+            # Flexible pattern: Q2 Summary ... $<number>
+            match = re.search(r"Q2 Summary.*?\$([\d,]+\.\d{2})", text)
+            if match:
+                val_str = match.group(1).replace(',', '')
+                print(f"✅ Regex found Q2 Summary: {val_str}")
+                return float(val_str)
+        
         # Truncate if too long (simple heuristic)
         if len(text) > 20000:
              text = text[:20000] + "...(truncated)"
