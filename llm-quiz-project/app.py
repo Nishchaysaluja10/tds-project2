@@ -4,6 +4,7 @@ from orders_handler import process_orders_csv
 from logs_handler import process_logs_zip
 from invoice_handler import process_invoice_pdf
 from diff_handler import process_image_diff
+from rate_handler import calculate_rate_limit_answer
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -867,6 +868,39 @@ def handle_quiz():
                     traceback.print_exc()
                     answer = None
             
+            # Rate Limit (Q18)
+            elif json_text and 'rate' in question.lower() and 'limits' in question.lower():
+                print(f"⏱️ Handling Rate Limit Quiz")
+                # json_text is likely the rate.json content if it was found in files
+                # Wait, scraper puts it in files.
+                # If there's a file called 'rate.json' in files dict
+                # Check directly
+                rate_json_content = None
+                if quiz_data.get('files'):
+                     for name, content in quiz_data['files'].items():
+                         if 'rate.json' in name:
+                             # If content is URL, download it?
+                             # Scraper logic usually downloads textual files if they are small?
+                             # Or provides URL.
+                             if content.startswith('http'):
+                                 import requests
+                                 print(f"Downloading rate.json from {content}")
+                                 r = requests.get(content, timeout=10)
+                                 r.raise_for_status()
+                                 rate_json_content = r.text
+                             else:
+                                 rate_json_content = content
+                             break
+                
+                # If not found in files but json_text is present?
+                if not rate_json_content and json_text:
+                    rate_json_content = json_text
+                    
+                if rate_json_content:
+                    answer = calculate_rate_limit_answer(rate_json_content, YOUR_EMAIL)
+                else:
+                    print("❌ rate.json not found for Q18")
+
             # Regular GPT solving (includes Q12 Chart)
             else:
                 answer = solve_with_gpt(question, data_context or json_text, quiz_url=current_url)
