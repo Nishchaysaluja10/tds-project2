@@ -253,9 +253,9 @@ def normalize_csv_to_json(csv_text):
         # Sort by id ascending (as question states)
         df = df.sort_values(by='id')
         
-        # Convert to dict then JSON with standard formatting (spaces)
+        # Convert to dict then JSON with compact formatting (no spaces)
         records = df.to_dict(orient='records')
-        result = json.dumps(records) # Default separators adds spaces
+        result = json.dumps(records, separators=(',', ':'))
         # print(f"📊 CSV normalized to JSON: {len(result)} chars")
         # print(f"📊 First record: {records[0] if records else 'empty'}")
         return result
@@ -730,6 +730,17 @@ def handle_quiz():
             # Step 3: Solve with appropriate method
             answer = None
             
+            # Determine if this is the Orders quiz (Q11)
+            is_orders_quiz = 'orders' in question.lower()
+            if not is_orders_quiz and quiz_data.get('files'):
+                for furl in quiz_data['files'].values():
+                    if 'orders.csv' in furl:
+                        is_orders_quiz = True
+                        break
+
+            # Step 3: Solve with appropriate method
+            answer = None
+            
             # Audio transcription
             if audio_url:
                 answer = transcribe_audio(audio_url)
@@ -737,19 +748,9 @@ def handle_quiz():
             # Image analysis
             elif image_url:
                 answer = analyze_image_with_gpt(image_url, question)
-            
-            print(f"DEBUG: Question text: {question}")
-            
+
             # Orders CSV processing (Q11)
-            # Robust check: look for orders.csv in the file list or question text
-            is_orders_quiz = 'orders' in question.lower()
-            if not is_orders_quiz and quiz_data.get('files'):
-                for furl in quiz_data['files'].values():
-                    if 'orders.csv' in furl:
-                        is_orders_quiz = True
-                        break
-            
-            if is_orders_quiz and 'total' in question.lower():
+            elif is_orders_quiz and 'total' in question.lower():
                 # Download and process orders.csv
                 orders_url = 'https://tds-llm-analysis.s-anand.net/project2/orders.csv'
                 print(f"📊 Downloading orders.csv from: {orders_url}")
