@@ -1,5 +1,9 @@
 from flask import Flask, request, jsonify
 import os
+from orders_handler import process_orders_csv
+from logs_handler import process_logs_zip
+from invoice_handler import process_invoice_pdf
+from diff_handler import process_image_diff
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -741,13 +745,37 @@ def handle_quiz():
             # Step 3: Solve with appropriate method
             answer = None
             
-            # Audio transcription
+            # Orders (Q11) detection
+            is_orders_quiz = 'orders' in question.lower()
+            if not is_orders_quiz and quiz_data.get('files'):
+                for furl in quiz_data['files'].values():
+                    if 'orders.csv' in furl:
+                        is_orders_quiz = True
+                        break
+
+            # Audio transcription (Q5)
             if audio_url:
                 answer = transcribe_audio(audio_url)
             
-            # Image analysis
+            # Image Diff (Q17) - Check BEFORE generic image analysis
+            elif 'diff' in question.lower() and 'pixels' in question.lower():
+                # Find before/after images in files
+                before_url = None
+                after_url = None
+                for name, url in quiz_data['files'].items():
+                    if 'before' in name or 'before' in url:
+                        before_url = url
+                    if 'after' in name or 'after' in url:
+                        after_url = url
+                
+                if before_url and after_url:
+                    answer = process_image_diff(before_url, after_url)
+                else:
+                    print("❌ Missing before/after images for diff quiz")
+            
+            # Generic Image analysis (Q6)
             elif image_url:
-                answer = analyze_image_with_gpt(image_url, question)
+                answer = analyze_image_with_gpt(image_url, question) # Q6 Handler
 
             # Orders CSV processing (Q11)
             elif is_orders_quiz and 'total' in question.lower():
@@ -828,9 +856,20 @@ def handle_quiz():
                     traceback.print_exc()
                     answer = None
             
-            # Regular GPT solving
+            # Regular GPT solving (includes Q12 Chart)
             else:
                 answer = solve_with_gpt(question, data_context or json_text, quiz_url=current_url)
+                
+                # Q12 (Chart) Cleanup: expects single letter
+                if 'chart' in question.lower() and 'single letter' in question.lower():
+                    import re
+                    match = re.search(r'\b([A-C])\b', answer)
+                    if match:
+                        print(f"🧹 Q12 Cleaned: {answer} -> {match.group(1)}")
+                        answer = match.group(1)
+                    elif 'answer=' in answer:
+                        answer = answer.split('answer=')[1].split('&')[0]
+                        print(f"🧹 Q12 Cleaned (URL param): {answer}")
             
             # Always submit answer (even if None) to get next URL and avoid infinite loop
             if answer is None:
